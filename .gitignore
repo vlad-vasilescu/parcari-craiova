@@ -1,0 +1,10 @@
+# Live session tokens
+sample_curl.sh
+
+# Scraped data and generated outputs (re-create with the scripts)
+blocuri/
+site/
+shapefiles/
+
+__pycache__/
+*:Zone.Identifier

@@ -1,0 +1,910 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Parking Map</title>
+<script>
+  // Apply a saved light/dark choice before the first paint; without one the system preference is used.
+  try {
+    const t = localStorage.getItem("theme");
+    if (t === "light" || t === "dark") document.documentElement.dataset.theme = t;
+  } catch {}
+</script>
+<style>
+  :root {
+    color-scheme: light;
+    --bg: #f6f7f9; --panel: #fff; --text: #1d2330; --muted: #6b7280; --border: #d9dde3;
+    --building: #9aa3b2; --lot: rgba(139, 149, 167, .18); --lot-stroke: #8b95a7; --lot-near: rgba(214, 69, 69, .2);
+    --c0: #2e9e5b; --c1: #3b7dd8; --c2: #e0a020; --c3: #d64545; --none: #b8bec8;
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --bg: #14171c; --panel: #1d2128; --text: #e6e9ee; --muted: #9aa3b2; --border: #333a45;
+    --building: #5c6575; --lot: rgba(92, 101, 117, .22); --lot-stroke: #5c6575; --lot-near: rgba(214, 69, 69, .25); --none: #4a515c;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      color-scheme: dark;
+      --bg: #14171c; --panel: #1d2128; --text: #e6e9ee; --muted: #9aa3b2; --border: #333a45;
+      --building: #5c6575; --lot: rgba(92, 101, 117, .22); --lot-stroke: #5c6575; --lot-near: rgba(214, 69, 69, .25); --none: #4a515c;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 14px/1.4 system-ui, sans-serif; background: var(--bg); color: var(--text); }
+  header { display: flex; align-items: center; justify-content: space-between; gap: 12px;
+    padding: 12px 16px; border-bottom: 1px solid var(--border); background: var(--panel); }
+  .switch { display: flex; align-items: center; gap: 8px; flex-shrink: 0; padding: 4px; font: inherit; color: var(--text);
+    background: none; border: 0; border-radius: 6px; cursor: pointer; }
+  .switch:focus-visible { outline: 2px solid var(--c1); outline-offset: 2px; }
+  .switch .track { position: relative; width: 36px; height: 20px; border-radius: 10px; background: var(--border); transition: background .15s; }
+  .switch .thumb { position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 50%; background: #fff;
+    box-shadow: 0 1px 2px rgba(0,0,0,.3); transition: transform .15s; }
+  .switch[aria-checked="true"] .track { background: var(--c1); }
+  .switch[aria-checked="true"] .thumb { transform: translateX(16px); }
+  .iconBtn { display: flex; align-items: center; justify-content: center; flex-shrink: 0; width: 36px; height: 36px; padding: 0;
+    color: var(--text); background: none; border: 1px solid var(--border); border-radius: 8px; cursor: pointer; }
+  .iconBtn:hover { background: var(--bg); }
+  .iconBtn:focus-visible { outline: 2px solid var(--c1); outline-offset: 2px; }
+  dialog { width: min(340px, calc(100vw - 32px)); padding: 0; color: var(--text); background: var(--panel);
+    border: 1px solid var(--border); border-radius: 10px; box-shadow: 0 10px 30px rgba(0,0,0,.25); }
+  dialog::backdrop { background: rgba(0,0,0,.4); }
+  /* Padding lives on this wrapper so a click whose target is the <dialog> itself can only be on the backdrop. */
+  .settingsBody { display: flex; flex-direction: column; gap: 4px; padding: 14px 16px 16px; }
+  .settingsHead { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+  .settingsHead h2 { margin: 0; font-size: 16px; }
+  .settingsHead .iconBtn { width: 30px; height: 30px; border: 0; }
+  #login label { display: flex; flex-direction: column; gap: 4px; padding: 4px; }
+  #login p { margin: 0 4px 6px; color: var(--muted); }
+  #loginError { margin: 4px 4px 0; color: var(--c3); }
+  #login .btn { align-self: flex-end; }
+  #settings .switch { flex-direction: row-reverse; justify-content: space-between; width: 100%; padding: 8px 4px; }
+  .segmented { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 0; padding: 8px 4px; border: 0; }
+  .segmented legend { float: left; padding: 0; }
+  .segmented div { display: flex; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
+  .segmented label { cursor: pointer; }
+  .segmented label + label { border-left: 1px solid var(--border); }
+  .segmented input { position: absolute; opacity: 0; pointer-events: none; }
+  .segmented span { display: block; padding: 4px 10px; }
+  .segmented label:hover span { background: var(--bg); }
+  .segmented input:checked + span { color: #fff; background: var(--c1); }
+  .segmented input:focus-visible + span { outline: 2px solid var(--c1); outline-offset: -2px; }
+  header h1 { margin: 0; font-size: 18px; }
+  header p { margin: 2px 0 0; color: var(--muted); }
+  /* Search and lots | map | legend and details. Narrower: map on top, the two columns side by side under it;
+     phones: one column. align-items: start keeps the map card from stretching to the side columns' height,
+     which left an empty strip under the fixed-height canvas. */
+  main { display: grid; grid-template-columns: 300px minmax(0, 1fr) 300px; grid-template-areas: "search map info";
+    gap: 16px; padding: 16px; align-items: start; }
+  @media (max-width: 1100px) {
+    main { grid-template-columns: repeat(2, minmax(0, 1fr)); grid-template-areas: "map map" "search info"; }
+  }
+  @media (max-width: 700px) {
+    main { grid-template-columns: minmax(0, 1fr); grid-template-areas: "map" "info" "search"; }
+  }
+  #searchCol { grid-area: search; }
+  #infoCol { grid-area: info; }
+  #mapWrap { grid-area: map; position: relative; background: var(--panel); border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+  canvas { display: block; width: 100%; height: 75vh; cursor: grab; }
+  canvas.over { cursor: pointer; }
+  canvas.dragging { cursor: grabbing; }
+  #tip { position: absolute; display: none; pointer-events: none; white-space: nowrap; font-size: 12px; padding: 2px 6px;
+    background: var(--panel); border: 1px solid var(--border); border-radius: 4px; }
+  #attrib { position: absolute; right: 0; bottom: 0; font-size: 11px; padding: 1px 6px; color: var(--muted);
+    background: var(--panel); opacity: .85; border-top-left-radius: 4px; }
+  #attrib a { color: inherit; }
+  #loading { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 8px; color: var(--muted); background: var(--panel); }
+  #loading .bar { width: min(320px, 70%); height: 8px; border-radius: 4px; background: var(--border); overflow: hidden; }
+  #loadingBar { width: 0; height: 100%; background: var(--c1); transition: width .15s; }
+  aside { display: flex; flex-direction: column; gap: 16px; }
+  .card { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px; }
+  .card h2 { margin: 0 0 8px; font-size: 15px; }
+  .legend div { display: flex; align-items: center; gap: 8px; margin: 4px 0; }
+  .sw { width: 14px; height: 14px; border-radius: 3px; border: 1px solid rgba(0,0,0,.2); }
+  table { border-collapse: collapse; width: 100%; }
+  td { padding: 3px 0; vertical-align: top; }
+  td:first-child { color: var(--muted); padding-right: 10px; white-space: nowrap; }
+  .lotRow { display: flex; justify-content: space-between; padding: 3px 0; cursor: pointer; }
+  .lotRow:hover { text-decoration: underline; }
+  #error { color: var(--c3); }
+  #lots, #blocResults { max-height: 260px; overflow-y: auto; }
+  #blocResults .lotRow { gap: 12px; }
+  #blocResults .lotRow span:last-child { text-align: right; }
+  .btn { margin-top: 10px; padding: 6px 12px; font: inherit; color: var(--text); background: var(--bg);
+    border: 1px solid var(--border); border-radius: 6px; cursor: pointer; }
+  .btn:hover:not(:disabled) { border-color: var(--c1); }
+  .btn:disabled { cursor: progress; opacity: .6; }
+  .btn:focus-visible { outline: 2px solid var(--c1); outline-offset: 2px; }
+  .refetchError { margin-top: 6px; color: var(--c3); }
+  #lotFilter, #blocSearch, #login input { width: 100%; margin-bottom: 8px; padding: 6px 8px; font: inherit; color: var(--text);
+    background: var(--bg); border: 1px solid var(--border); border-radius: 6px; }
+</style>
+</head>
+<body>
+<header>
+  <div>
+    <h1 id="title">Loading…</h1>
+    <p id="subtitle"></p>
+  </div>
+  <button id="settingsBtn" class="iconBtn" type="button" aria-label="Settings" aria-haspopup="dialog" title="Settings">
+    <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2"
+      stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+      <circle cx="12" cy="12" r="3"/>
+      <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+    </svg>
+  </button>
+</header>
+<dialog id="settings" aria-labelledby="settingsTitle">
+  <div class="settingsBody">
+    <div class="settingsHead">
+      <h2 id="settingsTitle">Settings</h2>
+      <button id="settingsClose" class="iconBtn" type="button" aria-label="Close">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"
+          stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
+      </button>
+    </div>
+    <button id="themeSwitch" class="switch" type="button" role="switch" aria-checked="false">
+      <span class="track"><span class="thumb"></span></span>Dark mode
+    </button>
+    <fieldset id="background" class="segmented">
+      <legend>Background</legend>
+      <div>
+        <label><input type="radio" name="background" value="osm" checked><span>Map</span></label>
+        <label><input type="radio" name="background" value="esri"><span>Satellite</span></label>
+        <label><input type="radio" name="background" value="none"><span>None</span></label>
+      </div>
+    </fieldset>
+  </div>
+</dialog>
+<dialog id="login" aria-labelledby="loginTitle">
+  <form class="settingsBody">
+    <div class="settingsHead">
+      <h2 id="loginTitle">Log in to refetch</h2>
+      <button id="loginClose" class="iconBtn" type="button" aria-label="Close">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"
+          stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
+      </button>
+    </div>
+    <p>Your parcari-ticketing.primariacraiova.ro account. serve.py keeps it in memory only.</p>
+    <label>Email<input name="email" type="email" autocomplete="username" required></label>
+    <label>Password<input name="password" type="password" autocomplete="current-password" required></label>
+    <div id="loginError"></div>
+    <button class="btn" type="submit">Log in</button>
+  </form>
+</dialog>
+<main>
+  <aside id="searchCol">
+    <div class="card"><h2>Find a bloc</h2>
+      <input id="blocSearch" type="search" placeholder="e.g. 78 argetoianu, K26, calea bucuresti…" autocomplete="off">
+      <div id="blocResults"></div>
+    </div>
+    <div class="card"><h2>Parking lots</h2>
+      <input id="lotFilter" type="search" placeholder="Filter by lot, bloc or street…">
+      <div id="lots"></div>
+    </div>
+  </aside>
+  <div id="mapWrap">
+    <canvas id="map"></canvas><div id="tip"></div>
+    <div id="attrib"></div>
+    <div id="loading">
+      <div id="loadingText">Finding data files…</div>
+      <div class="bar" role="progressbar" aria-label="Loading data" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><div id="loadingBar"></div></div>
+    </div>
+  </div>
+  <aside id="infoCol">
+    <div class="card legend">
+      <h2>Registrations per spot</h2>
+      <div><span class="sw" style="background:var(--c0)"></span>0</div>
+      <div><span class="sw" style="background:var(--c1)"></span>1</div>
+      <div><span class="sw" style="background:var(--c2)"></span>2</div>
+      <div><span class="sw" style="background:var(--c3)"></span>3+</div>
+      <div><span class="sw" style="background:var(--none)"></span>not in auction</div>
+      <div><span class="sw" style="border:1.5px dashed var(--text)"></span>handicap spot</div>
+      <p style="color:var(--muted);margin:8px 0 0">Scroll to zoom, drag to pan, click a spot for details.</p>
+    </div>
+    <div class="card"><h2>Details</h2><div id="details" style="color:var(--muted)">Click a spot or lot.</div></div>
+    <div id="error"></div>
+  </aside>
+</main>
+
+<script>
+const canvas = document.getElementById("map");
+const ctx = canvas.getContext("2d");
+const tip = document.getElementById("tip");
+const SPOT_FILLS = ["c0", "c1", "c2", "c3"];
+
+// Canvas can't use CSS variables, so the theme colors are copied out of them (again when the theme changes).
+const C = {};
+function readColors() {
+  const cs = getComputedStyle(document.documentElement);
+  for (const v of ["c0", "c1", "c2", "c3", "none", "text", "muted", "building", "lot", "lot-stroke", "lot-near"])
+    C[v] = cs.getPropertyValue("--" + v).trim();
+}
+
+// Light/dark: an explicit choice (data-theme, saved per browser) overrides the system preference.
+// Listeners on "themechange" re-read colors that can't follow CSS variables on their own (the canvas).
+const systemDark = matchMedia("(prefers-color-scheme: dark)");
+const themeSwitch = document.getElementById("themeSwitch");
+const isDark = () => {
+  const t = document.documentElement.dataset.theme;
+  return t ? t === "dark" : systemDark.matches;
+};
+const themeChanged = () => {
+  themeSwitch.setAttribute("aria-checked", isDark());
+  dispatchEvent(new Event("themechange"));
+};
+themeSwitch.addEventListener("click", () => {
+  const t = isDark() ? "light" : "dark";
+  document.documentElement.dataset.theme = t;
+  try { localStorage.setItem("theme", t); } catch {}
+  themeChanged();
+});
+systemDark.addEventListener("change", themeChanged);
+
+const settings = document.getElementById("settings");
+document.getElementById("settingsBtn").addEventListener("click", () => settings.showModal());
+document.getElementById("settingsClose").addEventListener("click", () => settings.close());
+settings.addEventListener("click", e => { if (e.target === settings) settings.close(); });
+
+// The login dialog: serve.py answers a refetch with 401 when it has no working session.
+const login = document.getElementById("login"), loginForm = login.querySelector("form");
+const loginError = document.getElementById("loginError"), loginBtn = loginForm.querySelector(".btn");
+document.getElementById("loginClose").addEventListener("click", () => login.close());
+login.addEventListener("click", e => { if (e.target === login) login.close(); });
+loginForm.addEventListener("submit", async e => {
+  e.preventDefault();
+  loginBtn.disabled = true;
+  loginError.textContent = "";
+  try {
+    const r = await fetch("api/login", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email: loginForm.email.value, password: loginForm.password.value }) });
+    const data = await r.json().catch(() => null);
+    if (!r.ok) throw new Error(data?.error ?? `HTTP ${r.status}`);
+    loginForm.password.value = "";
+    login.close("ok");
+  } catch (err) {
+    loginError.textContent = err.message;
+  } finally {
+    loginBtn.disabled = false;
+  }
+});
+// Resolves to whether the user logged in before closing the dialog.
+function askLogin() {
+  login.returnValue = "";
+  loginError.textContent = "";
+  login.showModal();
+  return new Promise(resolve => login.addEventListener("close", () => resolve(login.returnValue === "ok"), { once: true }));
+}
+themeChanged();
+
+function fmtDate(s) {
+  return s ? new Date(s).toLocaleString() : "—";
+}
+
+function rows(obj) {
+  return "<table>" + Object.entries(obj)
+    .map(([k, v]) => `<tr><td>${k}</td><td>${v ?? "—"}</td></tr>`).join("") + "</table>";
+}
+
+function draw(buildings, lotArr) {
+  const lotById = new Map(lotArr.map(l => [l.id, l]));
+  const summary = () => {
+    const lots = [...lotById.values()];
+    const spotCount = lots.reduce((n, l) => n + l.residence_parking_spots.length, 0);
+    document.getElementById("title").textContent = buildings.length <= 3
+      ? buildings.map(b => `${b.name} (${b.street} ${b.house_number})`).join(" · ")
+      : `${buildings.length} buildings`;
+    document.getElementById("subtitle").textContent =
+      `${buildings.length} buildings · ${lots.length} parking lots · ${spotCount} spots · waitlist: ${buildings.reduce((n, b) => n + b.waitlist.length, 0)}`;
+  };
+  summary();
+
+  // Bounds of every ring; a loop rather than Math.min(...pts), which overflows the stack with this many points.
+  let minLon = Infinity, maxLon = -Infinity, minLat = Infinity, maxLat = -Infinity;
+  const extend = ring => {
+    for (const [lon, lat] of ring) {
+      if (lon < minLon) minLon = lon;
+      if (lon > maxLon) maxLon = lon;
+      if (lat < minLat) minLat = lat;
+      if (lat > maxLat) maxLat = lat;
+    }
+  };
+  buildings.forEach(b => extend(b.geometry.coordinates[0]));
+  for (const lot of lotArr) {
+    extend(lot.geometry.coordinates[0]);
+    lot.residence_parking_spots.forEach(s => extend(s.geometry.coordinates[0]));
+  }
+
+  // Project lon/lat to Web Mercator (what OSM tiles use, so they line up exactly), scaled to meters at the
+  // center latitude. mercX/mercY are the normalized 0..1 tile coordinates; S is meters per whole world.
+  const lat0 = (minLat + maxLat) / 2;
+  const S = 2 * Math.PI * 6378137 * Math.cos(lat0 * Math.PI / 180);
+  const mercX = lon => (lon + 180) / 360;
+  const mercY = lat => (1 - Math.log(Math.tan(Math.PI / 4 + lat * Math.PI / 360)) / Math.PI) / 2;
+  const X0 = mercX(minLon), Y0 = mercY(maxLat), pad = 10;
+  const toXY = ([lon, lat]) => [(mercX(lon) - X0) * S + pad, (mercY(lat) - Y0) * S + pad];
+  const [W, H] = toXY([maxLon, minLat]).map(v => v + pad);
+
+  // Background tile sources. Esri imagery of Craiova stops at z18 (z19 is a "Map data not yet available"
+  // placeholder), so zooming in further stretches z18. Photos aren't inverted in dark mode, only dimmed.
+  const SOURCES = {
+    osm: {
+      url: (z, x, y) => `https://tile.openstreetmap.org/${z}/${x}/${y}.png`, maxZoom: 19, invert: true, alpha: [0.75, 0.55],
+      attrib: '© <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> contributors',
+    },
+    esri: {
+      url: (z, x, y) => `https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/${z}/${y}/${x}`,
+      maxZoom: 18, invert: false, alpha: [0.9, 0.7],
+      attrib: 'Imagery © <a href="https://www.esri.com" target="_blank" rel="noopener">Esri</a>, Maxar, Earthstar Geographics',
+    },
+  };
+  // Tiles from either source share one small LRU cache; each one redraws the map when it arrives.
+  const tiles = new Map();
+  const tile = (src, z, x, y) => {
+    const key = `${src}/${z}/${x}/${y}`;
+    let img = tiles.get(key);
+    if (img) tiles.delete(key);
+    else {
+      img = new Image();
+      img.crossOrigin = "anonymous";
+      img.onload = () => schedule();
+      img.src = SOURCES[src].url(z, x, y);
+      if (tiles.size >= 400) tiles.delete(tiles.keys().next().value);
+    }
+    tiles.set(key, img);
+    return img;
+  };
+  const ready = img => img?.complete && img.naturalWidth > 0;
+  // Dark mode inverts the tiles; ctx.filter is too slow to run every frame, so each tile is inverted once.
+  const darkTile = img => {
+    if (!img.dark) {
+      const c = img.dark = document.createElement("canvas");
+      c.width = img.naturalWidth;
+      c.height = img.naturalHeight;
+      const g = c.getContext("2d");
+      g.filter = "invert(1) hue-rotate(180deg)";
+      g.drawImage(img, 0, 0);
+    }
+    return img.dark;
+  };
+  // The chosen background ("osm", "esri" or "none") is saved per browser, like the theme.
+  let background = "osm";
+  try {
+    const saved = localStorage.getItem("background");
+    if (saved in SOURCES || saved === "none") background = saved;
+  } catch {}
+  const setBackground = b => {
+    background = b;
+    document.querySelector(`#background input[value="${b}"]`).checked = true;
+    const attrib = document.getElementById("attrib");
+    attrib.innerHTML = SOURCES[b]?.attrib ?? "";
+    attrib.style.display = SOURCES[b] ? "" : "none";
+  };
+  setBackground(background);
+  document.getElementById("background").addEventListener("change", e => {
+    setBackground(e.target.value);
+    try { localStorage.setItem("background", e.target.value); } catch {}
+    schedule();
+  });
+  function drawTiles(cw, ch, dpr) {
+    const s = view.s, src = SOURCES[background];
+    // Pick the zoom whose 256px tiles are closest to their native size on screen, up to what the source has.
+    const z = Math.max(0, Math.min(src.maxZoom, Math.round(Math.log2(S * s * dpr / 256)))), n = 2 ** z;
+    const col = x => Math.floor((X0 + (x - pad) / S) * n), row = y => Math.floor((Y0 + (y - pad) / S) * n);
+    // Tile edges in device pixels, rounded so neighbouring tiles meet without seams.
+    const px = i => Math.round(((i / n - X0) * S + pad - view.x) * s * dpr);
+    const py = j => Math.round(((j / n - Y0) * S + pad - view.y) * s * dpr);
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    const dark = isDark();
+    ctx.globalAlpha = src.alpha[dark ? 1 : 0];
+    for (let i = col(view.x); i <= col(view.x + cw / s); i++) {
+      for (let j = Math.max(0, row(view.y)); j <= Math.min(n - 1, row(view.y + ch / s)); j++) {
+        let img = tile(background, z, i, j), sx = 0, sy = 0, sw = 256;
+        // Until it arrives, stretch the matching part of an already-loaded lower-zoom tile.
+        for (let up = 1; up <= 5 && up <= z && !ready(img); up++) {
+          const k = 2 ** up;
+          img = tiles.get(`${background}/${z - up}/${Math.floor(i / k)}/${Math.floor(j / k)}`);
+          sw = 256 / k; sx = (i % k) * sw; sy = (j % k) * sw;
+        }
+        if (ready(img)) ctx.drawImage(dark && src.invert ? darkTile(img) : img,
+          sx, sy, sw, sw, px(i), py(j), px(i + 1) - px(i), py(j + 1) - py(j));
+      }
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  // The map is drawn on a canvas: as ~100k SVG elements, every pan or zoom re-rendered all of them.
+  // Each polygon becomes a feature, bucketed into CHUNK-meter cells that hold one combined Path2D per style,
+  // so a frame is a few hundred fill/stroke calls over the visible cells instead of one per polygon.
+  // The combined paths are built when a cell is first drawn, and again after its features change (a refetch).
+  const CHUNK = 500;
+  const chunks = new Map();
+  const overlaps = (a, b) => a[0] <= b[2] && b[0] <= a[2] && a[1] <= b[3] && b[1] <= a[3];
+  const contains = (a, x, y) => a[0] <= x && x <= a[2] && a[1] <= y && y <= a[3];
+  const buildPaths = c => {
+    c.paths = {};
+    for (const fs of Object.values(c.features))
+      for (const f of fs) for (const l of f.layers) (c.paths[l] ??= new Path2D()).addPath(f.path);
+  };
+  // A cell's box isn't shrunk here; it's only used to skip cells, so a too-large one is harmless.
+  const removeFeature = f => {
+    const c = chunks.get(f.key);
+    c.features[f.kind] = c.features[f.kind].filter(g => g !== f);
+    c.paths = null;
+  };
+  const addFeature = (ring, kind, layers, props) => {
+    const pts = ring.map(toXY), path = new Path2D(), box = [Infinity, Infinity, -Infinity, -Infinity];
+    pts.forEach(([x, y], i) => {
+      i ? path.lineTo(x, y) : path.moveTo(x, y);
+      box[0] = Math.min(box[0], x); box[1] = Math.min(box[1], y);
+      box[2] = Math.max(box[2], x); box[3] = Math.max(box[3], y);
+    });
+    path.closePath();
+    const inner = pts.slice(0, -1);
+    const f = { kind, layers, pts, path, box, ...props,
+      cx: inner.reduce((a, q) => a + q[0], 0) / inner.length, cy: inner.reduce((a, q) => a + q[1], 0) / inner.length };
+    f.key = Math.floor(f.cx / CHUNK) + "," + Math.floor(f.cy / CHUNK);
+    let c = chunks.get(f.key);
+    if (!c) chunks.set(f.key, c = { box: [Infinity, Infinity, -Infinity, -Infinity], paths: null, features: { spot: [], building: [], lot: [] } });
+    c.box = [Math.min(c.box[0], box[0]), Math.min(c.box[1], box[1]), Math.max(c.box[2], box[2]), Math.max(c.box[3], box[3])];
+    c.features[kind].push(f);
+    c.paths = null;
+    return f;
+  };
+
+  // view.x/y: the world point (meters) at the canvas' top-left corner; view.s: CSS pixels per meter.
+  const view = { x: 0, y: 0, s: 1 };
+  let frame = 0;
+  const schedule = () => { frame ||= requestAnimationFrame(render); };
+  const fit = (x0, y0, x1, y1, m) => {
+    const cw = canvas.clientWidth, ch = canvas.clientHeight;
+    if (!cw || !ch) return false;
+    view.s = Math.min(cw / (x1 - x0 + 2 * m), ch / (y1 - y0 + 2 * m));
+    view.x = (x0 + x1 - cw / view.s) / 2;
+    view.y = (y0 + y1 - ch / view.s) / 2;
+    schedule();
+    return true;
+  };
+  const zoomTo = rings => {
+    const p = rings.flat().map(toXY), xs = p.map(q => q[0]), ys = p.map(q => q[1]);
+    fit(Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys), 15);
+  };
+
+  let selSpot = null, hoverSpot = null, selBuilding = null, nearLots = [];
+
+  function render() {
+    frame = 0;
+    const dpr = devicePixelRatio || 1, cw = canvas.clientWidth, ch = canvas.clientHeight, s = view.s;
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    // Hide labels when zoomed out: they are unreadable and slow down rendering.
+    const vw = cw / s, far = vw > 400, veryFar = vw > 2000;
+    const box = [view.x, view.y, view.x + vw, view.y + ch / s];
+    const visible = [...chunks.values()].filter(c => overlaps(c.box, box));
+    for (const c of visible) if (!c.paths) buildPaths(c);
+    const k = dpr * s, toWorld = () => ctx.setTransform(k, 0, 0, k, -view.x * k, -view.y * k);
+    // Line widths and dashes are in screen pixels, like vector-effect: non-scaling-stroke.
+    const paint = (path, fill, stroke, width, dash) => {
+      if (fill) { ctx.fillStyle = fill; ctx.fill(path); }
+      if (stroke) {
+        ctx.strokeStyle = stroke;
+        ctx.lineWidth = width / s;
+        ctx.setLineDash(dash ? dash.map(d => d / s) : []);
+        ctx.stroke(path);
+      }
+    };
+    const layer = (name, ...style) => { for (const c of visible) if (c.paths[name]) paint(c.paths[name], ...style); };
+    const spotOutline = (f, width) => paint(f.path, null, C.text, width, f.spot.spot_type === "handicap" && [3, 2]);
+    const labelBox = [box[0] - 10, box[1] - 10, box[2] + 10, box[3] + 10];
+    const labels = (kind, size, color, weight, alpha = 1) => {
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      ctx.font = `${weight} ${size * s}px system-ui, sans-serif`;
+      ctx.fillStyle = color;
+      ctx.globalAlpha = alpha;
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      for (const c of visible) for (const f of c.features[kind])
+        if (contains(labelBox, f.cx, f.cy)) ctx.fillText(f.label, (f.cx - view.x) * s, (f.cy - view.y) * s);
+      ctx.globalAlpha = 1;
+      toWorld();
+    };
+
+    if (background !== "none") drawTiles(cw, ch, dpr);
+    toWorld();
+    layer("lot", C.lot, C["lot-stroke"], 1);
+    nearLots.forEach(f => paint(f.path, C["lot-near"], C.c3, 2.5));
+    // Lot labels sit under the spots; keep them small so they don't clutter.
+    if (!far) labels("lot", 3, C.muted, 700, 0.5);
+    layer("building", C.building, C["lot-stroke"], 1);
+    if (selBuilding) paint(selBuilding.path, null, C.c3, 3);
+    for (const name of [...SPOT_FILLS, "none"]) layer(name, C[name]);
+    if (!veryFar) {
+      layer("spotStroke", null, C.text, 0.6);
+      layer("handicap", null, C.text, 0.6, [3, 2]);
+    }
+    if (hoverSpot) spotOutline(hoverSpot, 2);
+    if (selSpot) spotOutline(selSpot, 3);
+    if (!veryFar) labels("building", 4, C.text, 700);
+    if (!far) labels("spot", 1.6, "#fff", 600);
+  }
+
+  const details = document.getElementById("details");
+
+  const addBuilding = b => {
+    b.feature = addFeature(b.geometry.coordinates[0], "building", ["building"],
+      { b, label: b.name, tip: `${b.name}, ${b.street} ${b.house_number}` });
+  };
+  buildings.forEach(addBuilding);
+
+  const lotList = document.getElementById("lots");
+  const lotFilter = document.getElementById("lotFilter");
+  const lotRows = new Map();  // lot id -> { row, text }
+  const filterRow = ({ row, text }) => {
+    row.style.display = text.includes(lotFilter.value.trim().toLowerCase()) ? "" : "none";
+  };
+
+  // Creates a lot's features (the lot and its spots) and its list row, which the caller places in the list.
+  // removeLot() undoes it when a refetch replaces the lot.
+  function addLot(lot) {
+    const auction = lot.auctions[0];
+    const items = new Map((auction?.items ?? []).map(i => [i.id_res_parking_spot, i]));
+    const regs = [...items.values()].reduce((n, i) => n + i.registration_count, 0);
+
+    const showLot = () => {
+      details.style.color = "";
+      details.innerHTML = `<b>${lot.name}</b>` + rows({
+        "Regime": lot.parking_regime,
+        "Status": lot.status,
+        "Spots": lot.residence_parking_spots.length,
+        "Distance": lot.distances.map(([name, d]) => `${name}: ${d.toFixed(1)} m`).join("<br>"),
+        "Auction": auction?.name,
+        "Auction status": auction?.auction_status,
+        "Start": fmtDate(auction?.auction_start_date_time),
+        "End": fmtDate(auction?.auction_end_date_time),
+        "Total registrations": regs,
+        "Data from": fmtDate(lot.fetched),
+      });
+    };
+
+    lot.feature = addFeature(lot.geometry.coordinates[0], "lot", ["lot"], { lot, label: lot.name, show: showLot });
+    lot.features = [lot.feature];
+
+    for (const spot of lot.residence_parking_spots) {
+      const item = items.get(spot.id);
+      lot.features.push(addFeature(spot.geometry.coordinates[0], "spot", [
+        item ? SPOT_FILLS[Math.min(item.registration_count, 3)] : "none",
+        spot.spot_type === "handicap" ? "handicap" : "spotStroke",
+      ], {
+        lot, spot, item, label: spot.number,
+        tip: `${lot.name} #${spot.number} — ${item ? item.registration_count + " registration(s)" : "not in auction"}`,
+      }));
+    }
+
+    const row = document.createElement("div");
+    row.className = "lotRow";
+    row.dataset.name = lot.name;
+    row.innerHTML = `<span>${lot.name}</span><span style="color:var(--muted)">${lot.residence_parking_spots.length} spots · ${regs} reg.</span>`;
+    row.addEventListener("click", () => { showLot(); zoomTo([lot.geometry.coordinates[0]]); });
+    const entry = { row, text: (lot.name + " " + lot.distances.map(d => d[0]).join(" ")).toLowerCase() };
+    lotRows.set(lot.id, entry);
+    filterRow(entry);
+    return row;
+  }
+  function removeLot(lot) {
+    lot.features.forEach(removeFeature);
+    lotRows.get(lot.id).row.remove();
+    lotRows.delete(lot.id);
+  }
+  for (const lot of lotArr) lotList.appendChild(addLot(lot));
+
+  function showSpot(f) {
+    const { lot, spot, item } = f;
+    selSpot = f;
+    schedule();
+    details.style.color = "";
+    details.innerHTML = `<b>${lot.name} — spot #${spot.number}</b>` + rows({
+      "Type": spot.spot_type,
+      "Status": spot.status,
+      "Regime": spot.parking_regime_efectiv,
+      "Spot ID": spot.id,
+      "Registrations": item?.registration_count ?? "not in auction",
+      "Current bid": item?.current_bid,
+      "Base price PF": item?.base_price_pf,
+      "Base price PJ": item?.base_price_pj,
+      "Night price PF": item?.base_price_noapte_pf,
+      "Night price PJ": item?.base_price_noapte_pj,
+      "Increment": item?.increment,
+    });
+  }
+
+  // Bloc details + search
+  function showBloc(b, zoom) {
+    selBuilding = b.feature;
+    const near = b.nearLots.map(([id, d]) => [lotById.get(id), d]);
+    nearLots = near.map(([l]) => l.feature);
+    schedule();
+    if (zoom) zoomTo([b.geometry.coordinates[0], ...near.map(([l]) => l.geometry.coordinates[0])]);
+    details.style.color = "";
+    details.innerHTML = `<b>${b.name}</b>` + rows({
+      "Address": `${b.street} ${b.house_number}`,
+      "Bloc ID": b.id,
+      "Waitlist": b.waitlist.length,
+      "Nearby lots": near.length
+        ? near.map(([l, d]) => `${l.name} (${d.toFixed(1)} m, ${l.residence_parking_spots.length} spots)`).join("<br>")
+        : "none within 30 m",
+      "Data from": fmtDate(b.fetched),
+    }) + (staticSite ? "" : `<button class="btn" type="button">Refetch this bloc</button><div class="refetchError"></div>`);
+    // Needs serve.py: it downloads the bloc again from the city's API and saves it over blocuri/<id>.json.
+    if (staticSite) return;
+    const btn = details.querySelector(".btn"), error = details.querySelector(".refetchError");
+    btn.addEventListener("click", async () => {
+      btn.disabled = true;
+      btn.textContent = "Refetching…";
+      error.textContent = "";
+      try {
+        const refetch = async () => {
+          const r = await fetch(`api/refetch/${b.id}`, { method: "POST" });
+          return [r, await r.json().catch(() => null)];
+        };
+        let [r, data] = await refetch();
+        if (r.status === 401 && await askLogin()) [r, data] = await refetch();
+        if (!r.ok) throw new Error(data?.error ?? (r.status === 501
+          ? "this server can't refetch; start the viewer with python3 serve.py" : `HTTP ${r.status}`));
+        updateBloc(b, data);
+      } catch (err) {
+        btn.disabled = false;
+        btn.textContent = "Refetch this bloc";
+        error.textContent = `Refetch failed: ${err.message}`;
+      }
+    });
+  }
+
+  // Swaps in freshly fetched data for a bloc. Its building and every lot it was or now is near get new
+  // features and rows; other blocs' distances to those lots are kept.
+  function updateBloc(b, data) {
+    const fetched = Date.now(), label = `${data.name}, ${data.street} ${data.house_number}`;
+    const fresh = new Map(data.parking_lots.map(l => [l.id, l]));
+    for (const id of new Set([...b.nearLots.map(([id]) => id), ...fresh.keys()])) {
+      const old = lotById.get(id), l = fresh.get(id);
+      const distances = (old?.distances ?? []).filter(d => d[2] !== b.id);
+      if (l) distances.push([label, l.distance, b.id]);
+      if (old) removeLot(old);
+      const lot = l ? { ...l, fetched, distances } : { ...old, distances };
+      lotById.set(id, lot);
+      const next = [...lotList.children].find(r => r.dataset.name.localeCompare(lot.name) > 0);
+      lotList.insertBefore(addLot(lot), next ?? null);
+    }
+    const wasSelected = selBuilding === b.feature;
+    removeFeature(b.feature);
+    const { parking_lots, ...rest } = data;
+    Object.assign(b, rest, { fetched, nearLots: parking_lots.map(l => [l.id, l.distance]) });
+    addBuilding(b);
+    blocIndex.set(b, blocText(b));
+    summary();
+    // Drop references to the features that were just replaced.
+    selSpot = hoverSpot = null;
+    if (wasSelected) showBloc(b, false);
+    else if (selBuilding) nearLots = selBuilding.b.nearLots.map(([id]) => lotById.get(id).feature);
+    schedule();
+  }
+
+  const norm = s => s.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();
+  const blocText = b => norm(`${b.name} ${b.full_name} ${b.street} ${b.house_number}`);
+  const blocIndex = new Map(buildings.map(b => [b, blocText(b)]));
+  const blocResults = document.getElementById("blocResults");
+  const MAX_RESULTS = 50;
+  let hits = [];
+  const blocSearch = document.getElementById("blocSearch");
+  blocSearch.addEventListener("input", () => {
+    const terms = norm(blocSearch.value).split(/\s+/).filter(Boolean);
+    blocResults.innerHTML = "";
+    if (!terms.length) { hits = []; return; }
+    // Every term must match somewhere; blocs whose name is exactly a term ("78" -> "Bloc 78") come first.
+    const exact = b => terms.some(q => norm(b.name) === "bloc " + q) ? 0 : 1;
+    hits = [...blocIndex].filter(([, text]) => terms.every(q => text.includes(q)))
+      .map(([b]) => b)
+      .sort((a, b) => exact(a) - exact(b) || a.name.localeCompare(b.name, undefined, { numeric: true }));
+    for (const b of hits.slice(0, MAX_RESULTS)) {
+      const row = document.createElement("div");
+      row.className = "lotRow";
+      row.innerHTML = `<span>${b.name}</span><span style="color:var(--muted)">${b.street} ${b.house_number}</span>`;
+      row.addEventListener("click", () => showBloc(b, true));
+      blocResults.appendChild(row);
+    }
+    const note = document.createElement("div");
+    note.style.color = "var(--muted)";
+    note.textContent = !hits.length ? "No blocs found"
+      : hits.length > MAX_RESULTS ? `${hits.length - MAX_RESULTS} more — refine the search` : "";
+    blocResults.appendChild(note);
+  });
+  blocSearch.addEventListener("keydown", e => {
+    if (e.key === "Enter" && hits.length) showBloc(hits[0], true);
+  });
+
+  lotFilter.addEventListener("input", () => lotRows.forEach(filterRow));
+
+  // Hit testing: the topmost feature under the pointer (spots, then buildings, then lots), by ray casting.
+  const inside = (pts, x, y) => {
+    let c = false;
+    for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
+      const [xi, yi] = pts[i], [xj, yj] = pts[j];
+      if ((yi > y) !== (yj > y) && x < (xj - xi) * (y - yi) / (yj - yi) + xi) c = !c;
+    }
+    return c;
+  };
+  const hit = e => {
+    const r = canvas.getBoundingClientRect();
+    const x = view.x + (e.clientX - r.left) / view.s, y = view.y + (e.clientY - r.top) / view.s;
+    for (const kind of ["spot", "building", "lot"])
+      for (const c of chunks.values())
+        if (contains(c.box, x, y))
+          for (const f of c.features[kind]) if (contains(f.box, x, y) && inside(f.pts, x, y)) return f;
+    return null;
+  };
+  const click = f => {
+    if (f?.kind === "spot") showSpot(f);
+    else if (f?.kind === "building") showBloc(f.b, false);
+    else if (f?.kind === "lot") f.show();
+  };
+  const setHover = (f, e) => {
+    canvas.classList.toggle("over", !!f && f.kind !== "lot");
+    const spot = f?.kind === "spot" ? f : null;
+    if (spot !== hoverSpot) { hoverSpot = spot; schedule(); }
+    tip.style.display = f?.tip ? "block" : "none";
+    if (!f?.tip) return;
+    const r = canvas.getBoundingClientRect(), px = e.clientX - r.left, py = e.clientY - r.top;
+    tip.textContent = f.tip;
+    tip.style.left = px + 12 + "px";
+    tip.style.top = py + 12 + "px";
+    tip.style.transform = px > r.width / 2 ? "translateX(calc(-100% - 24px))" : "";
+  };
+
+  // Zoom (wheel) and pan (drag)
+  canvas.addEventListener("wheel", e => {
+    e.preventDefault();
+    const r = canvas.getBoundingClientRect(), px = e.clientX - r.left, py = e.clientY - r.top;
+    const mx = view.x + px / view.s, my = view.y + py / view.s;
+    view.s /= e.deltaY < 0 ? 0.85 : 1 / 0.85;
+    view.x = mx - px / view.s;
+    view.y = my - py / view.s;
+    schedule();
+  }, { passive: false });
+
+  let drag = null;
+  canvas.addEventListener("pointerdown", e => { drag = { x: e.clientX, y: e.clientY, vx: view.x, vy: view.y, moved: false }; });
+  window.addEventListener("pointerup", e => {
+    if (drag && !drag.moved) click(hit(e));
+    drag = null;
+    canvas.classList.remove("dragging");
+  });
+  window.addEventListener("pointermove", e => {
+    if (drag) {
+      const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
+      if (!drag.moved && Math.abs(dx) + Math.abs(dy) < 4) return;  // small movements still count as a click
+      drag.moved = true;
+      canvas.classList.add("dragging");
+      setHover(null);
+      view.x = drag.vx - dx / view.s;
+      view.y = drag.vy - dy / view.s;
+      schedule();
+    } else if (e.target === canvas) {
+      setHover(hit(e), e);
+    }
+  });
+  canvas.addEventListener("pointerleave", () => { if (!drag) setHover(null); });
+
+  readColors();
+  addEventListener("themechange", () => { readColors(); schedule(); });
+  let fitted = false;
+  new ResizeObserver(() => {
+    const dpr = devicePixelRatio || 1;
+    canvas.width = Math.round(canvas.clientWidth * dpr);
+    canvas.height = Math.round(canvas.clientHeight * dpr);
+    fitted ||= fit(0, 0, W, H, 0);
+    render();
+  }).observe(canvas);
+}
+
+const DATA_DIR = "blocuri/", MERGED = "data.json";
+const loading = document.getElementById("loading");
+let staticSite = false;  // loaded MERGED (a build_site.py copy): no serve.py, so no refetching
+
+function progress(text, frac) {
+  document.getElementById("loadingText").textContent = text;
+  document.getElementById("loadingBar").style.width = frac * 100 + "%";
+  loading.querySelector(".bar").setAttribute("aria-valuenow", Math.round(frac * 100));
+}
+
+// Loads MERGED if it exists (static hosting), otherwise every .json file listed in DATA_DIR's directory
+// listing (serve.py and python3 -m http.server provide one).
+async function loadAll() {
+  // The same bloc can be in two files, and neighbouring blocs share lots: keep one copy of each, and
+  // remember each building's distance to the lot as [label, meters, bloc id]. A lot's copies can differ
+  // once a bloc is refetched, so the one from the most recently written file wins.
+  const buildings = new Map(), lots = new Map(), failed = [];
+  const add = (b, fetched) => {
+    if (buildings.has(b.id)) return;
+    b.fetched = fetched;
+    const label = `${b.name}, ${b.street} ${b.house_number}`;
+    for (const lot of b.parking_lots) {
+      const old = lots.get(lot.id);
+      if (!old || fetched > old.fetched) lots.set(lot.id, { ...lot, fetched, distances: old?.distances ?? [] });
+      lots.get(lot.id).distances.push([label, lot.distance, b.id]);
+    }
+    b.nearLots = b.parking_lots.map(l => [l.id, l.distance]);
+    delete b.parking_lots;
+    buildings.set(b.id, b);
+  };
+
+  const merged = await fetch(MERGED);
+  if (merged.ok) {
+    staticSite = true;
+    await loadMerged(merged, add);
+  } else {
+    await loadFiles(add, failed);
+  }
+  if (failed.length) {
+    document.getElementById("error").textContent = `Could not load ${failed.length} file(s): ${failed.slice(0, 20).join(", ")}`;
+  }
+  // draw() blocks for a moment; let the browser paint this message first.
+  progress("Building the map…", 1);
+  await new Promise(r => requestAnimationFrame(() => setTimeout(r)));
+  draw([...buildings.values()], [...lots.values()].sort((a, b) => a.name.localeCompare(b.name)));
+  loading.remove();
+}
+
+// build_site.py stores each lot once and each bloc's lots as [id, distance]; rebuild the bloc files' shape.
+async function loadMerged(res, add) {
+  // A compressed response's Content-Length (if any) counts compressed bytes, so there's no total then.
+  const total = res.headers.get("Content-Encoding") ? 0 : +res.headers.get("Content-Length") || 0;
+  const reader = res.body.getReader(), chunks = [];
+  let size = 0;
+  for (let part; !(part = await reader.read()).done;) {
+    chunks.push(part.value);
+    size += part.value.length;
+    progress(`Loading data… ${(size / 1e6).toFixed(1)} MB`, total && size / total);
+  }
+  const { blocs, lots } = JSON.parse(await new Blob(chunks).text());
+  for (const b of blocs) {
+    b.parking_lots = b.parking_lots.map(([id, distance]) => ({ ...lots[id], distance }));
+    add(b, b.fetched);
+  }
+}
+
+async function loadFiles(add, failed) {
+  const dirUrl = new URL(DATA_DIR, location.href);
+  const r = await fetch(dirUrl);
+  if (!r.ok) throw new Error(`${DATA_DIR}: ${r.status} ${r.statusText}`);
+  const doc = new DOMParser().parseFromString(await r.text(), "text/html");
+  const files = [...new Set([...doc.querySelectorAll("a[href]")]
+    .map(a => new URL(a.getAttribute("href"), dirUrl).href)
+    .filter(u => u.endsWith(".json")))];
+  if (!files.length) throw new Error(`no .json files found in ${DATA_DIR}`);
+
+  let next = 0, done = 0;
+  const worker = async () => {
+    while (next < files.length) {
+      const f = files[next++];
+      try {
+        const res = await fetch(f);
+        if (!res.ok) throw new Error(res.status);
+        add(await res.json(), Date.parse(res.headers.get("Last-Modified")) || 0);
+      } catch {
+        failed.push(decodeURIComponent(f.split("/").pop()));
+      }
+      progress(`Loading blocs… ${++done} / ${files.length}`, done / files.length);
+    }
+  };
+  await Promise.all(Array.from({ length: 8 }, worker));
+}
+
+loadAll().catch(err => {
+  loading.remove();
+  document.getElementById("title").textContent = "Could not load data files";
+  document.getElementById("error").textContent =
+    `${err.message}. Serve this folder over HTTP with "python3 serve.py", then open http://localhost:8000`;
+});
+</script>
+</body>
+</html>
