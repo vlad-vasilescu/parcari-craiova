@@ -80,12 +80,13 @@
     main { grid-template-columns: repeat(2, minmax(0, 1fr)); grid-template-areas: "map map" "search info"; }
   }
   @media (max-width: 700px) {
-    main { grid-template-columns: minmax(0, 1fr); grid-template-areas: "map" "info" "search"; }
+    main { grid-template-columns: minmax(0, 1fr); grid-template-areas: "map" "info" "search"; gap: 12px; }
   }
   #searchCol { grid-area: search; }
   #infoCol { grid-area: info; }
   #mapWrap { grid-area: map; position: relative; background: var(--panel); border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
-  canvas { display: block; width: 100%; height: 75vh; cursor: grab; }
+  canvas { display: block; width: 100%; height: 75vh; cursor: grab; touch-action: none; user-select: none;
+    -webkit-user-select: none; -webkit-touch-callout: none; }
   canvas.over { cursor: pointer; }
   canvas.dragging { cursor: grabbing; }
   #tip { position: absolute; display: none; pointer-events: none; white-space: nowrap; font-size: 12px; padding: 2px 6px;
@@ -93,6 +94,13 @@
   #attrib { position: absolute; right: 0; bottom: 0; font-size: 11px; padding: 1px 6px; color: var(--muted);
     background: var(--panel); opacity: .85; border-top-left-radius: 4px; }
   #attrib a { color: inherit; }
+  #mapCtl { position: absolute; top: 8px; right: 8px; display: flex; flex-direction: column; gap: 6px; }
+  #mapCtl .iconBtn { background: var(--panel); box-shadow: 0 1px 3px rgba(0,0,0,.2); }
+  #mapCtl .iconBtn:hover { background: var(--bg); }
+  #locate.on { color: var(--c1); }
+  #mapMsg { position: absolute; left: 8px; top: 8px; max-width: calc(100% - 70px); padding: 4px 8px; font-size: 13px;
+    background: var(--panel); border: 1px solid var(--border); border-radius: 6px; }
+  #mapMsg:empty { display: none; }
   #loading { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center;
     gap: 8px; color: var(--muted); background: var(--panel); }
   #loading .bar { width: min(320px, 70%); height: 8px; border-radius: 4px; background: var(--border); overflow: hidden; }
@@ -107,6 +115,14 @@
   td:first-child { color: var(--muted); padding-right: 10px; white-space: nowrap; }
   .lotRow { display: flex; justify-content: space-between; padding: 3px 0; cursor: pointer; }
   .lotRow:hover { text-decoration: underline; }
+  .coarse { display: none; }
+  /* Touch screens: finger-sized targets, and hints that talk about taps rather than clicks. */
+  @media (pointer: coarse) {
+    .lotRow { padding: 8px 0; }
+    #mapCtl .iconBtn { width: 44px; height: 44px; }
+    .fine { display: none; }
+    .coarse { display: inline; }
+  }
   #error { color: var(--c3); }
   #lots, #blocResults { max-height: 260px; overflow-y: auto; }
   #blocResults .lotRow { gap: 12px; }
@@ -119,6 +135,15 @@
   .refetchError { margin-top: 6px; color: var(--c3); }
   #lotFilter, #blocSearch, #login input { width: 100%; margin-bottom: 8px; padding: 6px 8px; font: inherit; color: var(--text);
     background: var(--bg); border: 1px solid var(--border); border-radius: 6px; }
+  /* Phones (last, to override the rules above): the map is shorter than the screen, so there is always some
+     page outside it to scroll by (the canvas takes every touch for panning). Details come before the legend
+     so a tapped spot's are right under the map, and inputs are 16px so iOS doesn't zoom in on focus. */
+  @media (max-width: 700px) {
+    header { padding: 10px 16px; }
+    canvas { height: 65vh; }
+    #infoCol .legend { order: 1; }
+    #lotFilter, #blocSearch, #login input { font-size: 16px; }
+  }
 </style>
 </head>
 <body>
@@ -187,6 +212,21 @@
   <div id="mapWrap">
     <canvas id="map"></canvas><div id="tip"></div>
     <div id="attrib"></div>
+    <div id="mapMsg" role="status"></div>
+    <div id="mapCtl">
+      <button id="zoomIn" class="iconBtn" type="button" aria-label="Zoom in" title="Zoom in">
+        <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+      </button>
+      <button id="zoomOut" class="iconBtn" type="button" aria-label="Zoom out" title="Zoom out">
+        <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"/></svg>
+      </button>
+      <button id="zoomAll" class="iconBtn" type="button" aria-label="Show everything" title="Show everything">
+        <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5"/></svg>
+      </button>
+      <button id="locate" class="iconBtn" type="button" aria-label="Show my location" title="Show my location" aria-pressed="false">
+        <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="7"/><circle cx="12" cy="12" r="2"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/></svg>
+      </button>
+    </div>
     <div id="loading">
       <div id="loadingText">Finding data files…</div>
       <div class="bar" role="progressbar" aria-label="Loading data" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><div id="loadingBar"></div></div>
@@ -201,9 +241,9 @@
       <div><span class="sw" style="background:var(--c3)"></span>3+</div>
       <div><span class="sw" style="background:var(--none)"></span>not in auction</div>
       <div><span class="sw" style="border:1.5px dashed var(--text)"></span>handicap spot</div>
-      <p style="color:var(--muted);margin:8px 0 0">Scroll to zoom, drag to pan, click a spot for details.</p>
+      <p style="color:var(--muted);margin:8px 0 0"><span class="fine">Scroll or double-click to zoom, drag to pan, click a spot for details.</span><span class="coarse">Pinch or double-tap to zoom, drag to pan, tap a spot for details.</span></p>
     </div>
-    <div class="card"><h2>Details</h2><div id="details" style="color:var(--muted)">Click a spot or lot.</div></div>
+    <div class="card"><h2>Details</h2><div id="details" style="color:var(--muted)"><span class="fine">Click</span><span class="coarse">Tap</span> a spot or lot.</div></div>
     <div id="error"></div>
   </aside>
 </main>
@@ -466,12 +506,24 @@ function draw(buildings, lotArr) {
     schedule();
     return true;
   };
+  // When the map is stacked above the lists (narrow screens), a pick from a list scrolls it back into sight.
+  const stacked = matchMedia("(max-width: 1100px)");
   const zoomTo = rings => {
     const p = rings.flat().map(toXY), xs = p.map(q => q[0]), ys = p.map(q => q[1]);
     fit(Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys), 15);
+    if (stacked.matches) document.getElementById("mapWrap").scrollIntoView({ behavior: "smooth", block: "nearest" });
+  };
+  // Zooms by factor k, keeping the world point under canvas pixel (px, py) in place.
+  const zoomAt = (px, py, k) => {
+    const mx = view.x + px / view.s, my = view.y + py / view.s;
+    view.s *= k;
+    view.x = mx - px / view.s;
+    view.y = my - py / view.s;
+    schedule();
   };
 
-  let selSpot = null, hoverSpot = null, selBuilding = null, nearLots = [];
+  // me: the device's location (world meters) and its accuracy radius, while "Show my location" is on.
+  let selSpot = null, hoverSpot = null, selBuilding = null, nearLots = [], me = null;
 
   function render() {
     frame = 0;
@@ -527,6 +579,15 @@ function draw(buildings, lotArr) {
     if (selSpot) spotOutline(selSpot, 3);
     if (!veryFar) labels("building", 4, C.text, 700);
     if (!far) labels("spot", 1.6, "#fff", 600);
+    if (me) {
+      const halo = new Path2D(), dot = new Path2D();
+      halo.arc(me.x, me.y, me.r, 0, 2 * Math.PI);
+      dot.arc(me.x, me.y, 6 / s, 0, 2 * Math.PI);
+      ctx.globalAlpha = 0.15;
+      paint(halo, C.c1);
+      ctx.globalAlpha = 1;
+      paint(dot, C.c1, "#fff", 2);
+    }
   }
 
   const details = document.getElementById("details");
@@ -719,7 +780,9 @@ function draw(buildings, lotArr) {
     blocResults.appendChild(note);
   });
   blocSearch.addEventListener("keydown", e => {
-    if (e.key === "Enter" && hits.length) showBloc(hits[0], true);
+    if (e.key !== "Enter" || !hits.length) return;
+    blocSearch.blur();  // closes a phone's keyboard, which would cover the map
+    showBloc(hits[0], true);
   });
 
   lotFilter.addEventListener("input", () => lotRows.forEach(filterRow));
@@ -755,44 +818,136 @@ function draw(buildings, lotArr) {
     if (!f?.tip) return;
     const r = canvas.getBoundingClientRect(), px = e.clientX - r.left, py = e.clientY - r.top;
     tip.textContent = f.tip;
-    tip.style.left = px + 12 + "px";
-    tip.style.top = py + 12 + "px";
-    tip.style.transform = px > r.width / 2 ? "translateX(calc(-100% - 24px))" : "";
+    // Beside the pointer, on its left in the right half, kept inside the map; above a finger, not under it.
+    const w = tip.offsetWidth, h = tip.offsetHeight;
+    const left = px > r.width / 2 ? px - 12 - w : px + 12, top = e.pointerType === "touch" ? py - 24 - h : py + 12;
+    tip.style.left = Math.max(4, Math.min(left, r.width - w - 4)) + "px";
+    tip.style.top = Math.max(4, Math.min(top, r.height - h - 4)) + "px";
   };
 
-  // Zoom (wheel) and pan (drag)
+  // Zoom with the wheel, pan by dragging. Touch: one finger pans, two pinch-zoom (and pan with their midpoint).
+  // A press that barely moves is a click; a second one soon after at the same place zooms in.
+  const local = e => {
+    const r = canvas.getBoundingClientRect();
+    return [e.clientX - r.left, e.clientY - r.top];
+  };
   canvas.addEventListener("wheel", e => {
     e.preventDefault();
-    const r = canvas.getBoundingClientRect(), px = e.clientX - r.left, py = e.clientY - r.top;
-    const mx = view.x + px / view.s, my = view.y + py / view.s;
-    view.s /= e.deltaY < 0 ? 0.85 : 1 / 0.85;
-    view.x = mx - px / view.s;
-    view.y = my - py / view.s;
-    schedule();
+    zoomAt(...local(e), e.deltaY < 0 ? 1 / 0.85 : 0.85);
   }, { passive: false });
 
-  let drag = null;
-  canvas.addEventListener("pointerdown", e => { drag = { x: e.clientX, y: e.clientY, vx: view.x, vy: view.y, moved: false }; });
-  window.addEventListener("pointerup", e => {
-    if (drag && !drag.moved) click(hit(e));
+  const pointers = new Map();  // pointer id -> [clientX, clientY] while pressed
+  let drag = null, lastTap = null;
+  // Midpoint and spread of the first two pressed pointers (one pointer: itself, spread 0), in canvas pixels.
+  const grip = () => {
+    const [a, b = a] = pointers.values(), r = canvas.getBoundingClientRect();
+    return { x: (a[0] + b[0]) / 2 - r.left, y: (a[1] + b[1]) / 2 - r.top, d: Math.hypot(a[0] - b[0], a[1] - b[1]) };
+  };
+  // Pins the world point under the grip, so a move maps the new grip back onto it. Redone whenever a finger
+  // is added or lifted.
+  const regrip = () => {
+    const g = drag.grip = grip();
+    Object.assign(drag, { s: view.s, mx: view.x + g.x / view.s, my: view.y + g.y / view.s });
+  };
+  const tap = e => {
+    const [px, py] = local(e), f = hit(e);
+    click(f);
+    // Touch has no hover, so the tapped feature's tooltip stays up until the next tap or drag.
+    if (e.pointerType === "touch") setHover(f, e);
+    if (lastTap && e.timeStamp - lastTap.t < 350 && Math.hypot(px - lastTap.x, py - lastTap.y) < 30) {
+      zoomAt(px, py, 2);
+      lastTap = null;
+    } else {
+      lastTap = { t: e.timeStamp, x: px, y: py };
+    }
+  };
+  canvas.addEventListener("pointerdown", e => {
+    if (e.button > 0) return;
+    canvas.setPointerCapture(e.pointerId);
+    pointers.set(e.pointerId, [e.clientX, e.clientY]);
+    drag ??= { x: e.clientX, y: e.clientY, moved: false };
+    if (pointers.size > 1) drag.moved = true;  // a second finger is never a tap
+    regrip();
+  });
+  canvas.addEventListener("pointermove", e => {
+    if (!pointers.has(e.pointerId)) {
+      if (e.pointerType !== "touch") setHover(hit(e), e);
+      return;
+    }
+    pointers.set(e.pointerId, [e.clientX, e.clientY]);
+    // Small movements still count as a click; fingers wobble more than a mouse.
+    if (!drag.moved && Math.abs(e.clientX - drag.x) + Math.abs(e.clientY - drag.y) < (e.pointerType === "touch" ? 10 : 4)) return;
+    drag.moved = true;
+    canvas.classList.add("dragging");
+    setHover(null);
+    const g = grip();
+    if (pointers.size > 1 && drag.grip.d) view.s = drag.s * g.d / drag.grip.d;
+    view.x = drag.mx - g.x / view.s;
+    view.y = drag.my - g.y / view.s;
+    schedule();
+  });
+  const release = e => {
+    if (!pointers.delete(e.pointerId)) return;
+    if (pointers.size) return regrip();
+    if (!drag.moved && e.type === "pointerup") tap(e);
     drag = null;
     canvas.classList.remove("dragging");
-  });
-  window.addEventListener("pointermove", e => {
-    if (drag) {
-      const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
-      if (!drag.moved && Math.abs(dx) + Math.abs(dy) < 4) return;  // small movements still count as a click
-      drag.moved = true;
-      canvas.classList.add("dragging");
-      setHover(null);
-      view.x = drag.vx - dx / view.s;
-      view.y = drag.vy - dy / view.s;
-      schedule();
-    } else if (e.target === canvas) {
-      setHover(hit(e), e);
+  };
+  canvas.addEventListener("pointerup", release);
+  canvas.addEventListener("pointercancel", release);
+  // A finger lifted off the screen "leaves" too; keep a tapped tooltip up.
+  canvas.addEventListener("pointerleave", e => { if (!drag && e.pointerType !== "touch") setHover(null); });
+
+  const centerZoom = k => zoomAt(canvas.clientWidth / 2, canvas.clientHeight / 2, k);
+  document.getElementById("zoomIn").addEventListener("click", () => centerZoom(2));
+  document.getElementById("zoomOut").addEventListener("click", () => centerZoom(0.5));
+  document.getElementById("zoomAll").addEventListener("click", () => fit(0, 0, W, H, 0));
+
+  // "Show my location": follows the device's position with a dot. The first fix centers the map on it,
+  // zoomed in to at least ~200 m across; pressing again recenters, or turns it off once centered.
+  const locate = document.getElementById("locate"), mapMsg = document.getElementById("mapMsg");
+  let watch = null, msgTimer = 0;
+  const say = text => {
+    mapMsg.textContent = text;
+    clearTimeout(msgTimer);
+    msgTimer = setTimeout(() => { mapMsg.textContent = ""; }, 5000);
+  };
+  // Within 20 screen pixels of the middle (the dot drifts a little as fixes come in).
+  const centered = () => Math.hypot(view.x + canvas.clientWidth / 2 / view.s - me.x,
+    view.y + canvas.clientHeight / 2 / view.s - me.y) * view.s < 20;
+  const centerOnMe = () => {
+    view.s = Math.max(view.s, canvas.clientWidth / 200);
+    view.x = me.x - canvas.clientWidth / 2 / view.s;
+    view.y = me.y - canvas.clientHeight / 2 / view.s;
+    schedule();
+  };
+  const stopLocating = () => {
+    navigator.geolocation.clearWatch(watch);
+    watch = me = null;
+    locate.classList.remove("on");
+    locate.setAttribute("aria-pressed", "false");
+    schedule();
+  };
+  if (!navigator.geolocation) locate.hidden = true;
+  locate.addEventListener("click", () => {
+    if (watch !== null) {
+      if (me && !centered()) centerOnMe();
+      else if (me) stopLocating();
+      return;
     }
+    locate.classList.add("on");
+    locate.setAttribute("aria-pressed", "true");
+    say("Finding your location…");
+    watch = navigator.geolocation.watchPosition(pos => {
+      const first = !me, [x, y] = toXY([pos.coords.longitude, pos.coords.latitude]);
+      me = { x, y, r: pos.coords.accuracy };
+      if (first) { say(""); centerOnMe(); }
+      schedule();
+    }, err => {
+      stopLocating();
+      say(err.code === err.PERMISSION_DENIED ? "Location permission denied" : `Location unavailable: ${err.message}`);
+    }, { enableHighAccuracy: true });
   });
-  canvas.addEventListener("pointerleave", () => { if (!drag) setHover(null); });
 
   readColors();
   addEventListener("themechange", () => { readColors(); schedule(); });
