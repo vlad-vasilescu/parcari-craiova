@@ -10,6 +10,7 @@ A small, dependency-free tool for exploring Craiova's residential parking auctio
 - `export_shapefile.py` writes two zipped WGS84 polygon shapefiles to `shapefiles/`, copying the Roermond examples there (stdlib only): `craiova_<date>_4326.zip` with one record per parking spot, inactive ones left out (29 columns; ones with no Craiova data are empty/null; `area_id`/`park_code` are the lot id/name, `shape_id` the spot number), and `scanplanner_craiova_<date>.zip` with one record per neighbourhood zone and its total `spot_count`. OSM only has points for Craiova's neighbourhoods (cached in `neighbourhoods.json` from Overpass; delete it to refetch), so each lot goes to the nearest point and a zone is the convex hull of its lots clipped to that point's Voronoi cell. The zone name also goes into the spots file's `neighborh`/`roof_id`, as in Roermond.
 - `serve.py` serves the viewer (static files plus a refetch endpoint, see below).
 - `build_site.py` writes a static copy for hosting (Cloudflare Pages) into `site/`: `index.html` plus `data.json`, all blocs in one file with each lot stored once (`{"blocs": [...], "lots": {id: lot}}`, a bloc's `parking_lots` become `[[lot id, distance], ...]`, `fetched` is the file's mtime in ms). About 22 MB, ~3 MB compressed; Cloudflare's per-file limit is 25 MiB.
+- `refresh_lots.py` refreshes every known lot with as few requests as possible, then runs `build_site.py`. A bloc's response holds every lot within 30 m, so it refetches only the smallest set of blocs whose files list every lot in `blocuri/` (a minimum set cover, solved exactly: reductions, then branch and bound per independent component; about 420 blocs, under 4 s to solve). The list is recomputed from the current files on each run. Failed blocs keep their old files.
 - `index.html` is a single-file viewer (vanilla JS + inline SVG, no build step) that loads every file in `blocuri/` and draws buildings, parking lots and spots on a pannable/zoomable map, colored by auction registration count.
 
 There is no package manager, build, lint or test setup.
@@ -29,6 +30,9 @@ python3 serve.py [port]
 # Static site for hosting into site/ (or out_dir), then deploy that folder, e.g.
 # npx wrangler pages deploy site --project-name <name>, or upload it in the Cloudflare dashboard
 python3 build_site.py [out_dir]
+
+# Refetch the minimal set of blocs covering every lot, then rebuild site/ (--dry-run just lists the ids)
+python3 refresh_lots.py [--dry-run] [out_dir]
 ```
 
 ## Things that aren't obvious from a single file

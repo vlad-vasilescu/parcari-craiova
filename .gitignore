@@ -8,3 +8,5 @@ shapefiles/
 
 __pycache__/
 *:Zone.Identifier
+.claude
+

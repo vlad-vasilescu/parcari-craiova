@@ -24,8 +24,8 @@ IN_DIR = os.path.join(HERE, "blocuri")
 MAX_FILE = 25 * 1024 * 1024  # Cloudflare Pages' per-file limit
 
 
-def main():
-    out_dir = sys.argv[1] if len(sys.argv) > 1 else os.path.join(HERE, "site")
+def main(out_dir=None):
+    out_dir = out_dir or (sys.argv[1] if len(sys.argv) > 1 else os.path.join(HERE, "site"))
     files = sorted(glob.glob(os.path.join(IN_DIR, "*.json")), key=os.path.getmtime)
     if not files:
         sys.exit(f"no .json files in {IN_DIR}")
