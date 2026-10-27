@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build a static copy of the viewer for hosting without serve.py (e.g. Cloudflare Pages).
+"""Build a static copy of the viewer for hosting without serve.py (deploy_site.py puts it on Cloudflare).
 
 Writes index.html and data.json into out_dir. data.json holds every bloc in
 blocuri/*.json, with each parking lot stored once instead of once per nearby
@@ -21,7 +21,7 @@ import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 IN_DIR = os.path.join(HERE, "blocuri")
-MAX_FILE = 25 * 1024 * 1024  # Cloudflare Pages' per-file limit
+MAX_FILE = 25 * 1024 * 1024  # Cloudflare's per-file limit for static assets
 
 
 def main(out_dir=None):
@@ -53,7 +53,7 @@ def main(out_dir=None):
     size = os.path.getsize(data_path)
     print(f"{len(blocs)} blocs, {len(lots)} lots -> {data_path} ({size / 1e6:.1f} MB)")
     if size > MAX_FILE:
-        print("warning: over Cloudflare Pages' 25 MiB per-file limit", file=sys.stderr)
+        print("warning: over Cloudflare's 25 MiB per-file limit", file=sys.stderr)
 
 
 if __name__ == "__main__":

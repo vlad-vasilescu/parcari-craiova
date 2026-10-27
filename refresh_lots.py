@@ -1,15 +1,17 @@
 #!/usr/bin/env python3
-"""Refetch every known parking lot with as few requests as possible, then rebuild site/.
+"""Refetch every known parking lot with as few requests as possible, then rebuild and deploy site/.
 
 A bloc's response contains every lot within 30 m of it, so refetching a bloc
 refreshes all of its lots. This picks the smallest set of blocs whose files
 together list every lot in blocuri/ (a minimum set cover, solved exactly; about
 420 of the ~3.5k blocs), refetches those like fetch_blocuri.py does (same auth,
-delay and backoff), then runs build_site.py. build_site.py lets the newest file's
-copy of a lot win, so the fresh copies replace the stale ones in other blocs' files.
+delay and backoff), then runs build_site.py and deploy_site.py. build_site.py lets
+the newest file's copy of a lot win, so the fresh copies replace the stale ones in
+other blocs' files.
 
-Usage: python3 refresh_lots.py [--dry-run] [out_dir]   (default site/)
+Usage: python3 refresh_lots.py [--dry-run] [--no-deploy] [out_dir]   (default site/)
        --dry-run only prints the bloc ids that would be refetched.
+       --no-deploy rebuilds out_dir without deploying it.
 """
 import glob
 import json
@@ -18,6 +20,7 @@ import sys
 import time
 
 import build_site
+import deploy_site
 import fetch_blocuri
 
 
@@ -160,7 +163,8 @@ def min_cover(sets):
 def main():
     args = sys.argv[1:]
     dry_run = "--dry-run" in args
-    args = [a for a in args if a != "--dry-run"]
+    deploy = "--no-deploy" not in args
+    args = [a for a in args if a not in ("--dry-run", "--no-deploy")]
     out_dir = args[0] if args else os.path.join(fetch_blocuri.HERE, "site")
 
     sets = load_lots()
@@ -200,6 +204,8 @@ def main():
         print("Lots near only failed blocs keep their old data")
 
     build_site.main(out_dir)
+    if deploy and not deploy_site.main(out_dir):
+        sys.exit(1)
 
 
 if __name__ == "__main__":

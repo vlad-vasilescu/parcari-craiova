@@ -9,8 +9,9 @@ A small, dependency-free tool for exploring Craiova's residential parking auctio
 - `fetch_blocuri.py` scrapes one JSON file per building ("bloc") into `blocuri/<id>.json`.
 - `export_shapefile.py` writes two zipped WGS84 polygon shapefiles to `shapefiles/`, copying the Roermond examples there (stdlib only): `craiova_<date>_4326.zip` with one record per parking spot, inactive ones left out (29 columns; ones with no Craiova data are empty/null; `area_id`/`park_code` are the lot id/name, `shape_id` the spot number), and `scanplanner_craiova_<date>.zip` with one record per neighbourhood zone and its total `spot_count`. OSM only has points for Craiova's neighbourhoods (cached in `neighbourhoods.json` from Overpass; delete it to refetch), so each lot goes to the nearest point and a zone is the convex hull of its lots clipped to that point's Voronoi cell. The zone name also goes into the spots file's `neighborh`/`roof_id`, as in Roermond.
 - `serve.py` serves the viewer (static files plus a refetch endpoint, see below).
-- `build_site.py` writes a static copy for hosting (Cloudflare Pages) into `site/`: `index.html` plus `data.json`, all blocs in one file with each lot stored once (`{"blocs": [...], "lots": {id: lot}}`, a bloc's `parking_lots` become `[[lot id, distance], ...]`, `fetched` is the file's mtime in ms). About 22 MB, ~3 MB compressed; Cloudflare's per-file limit is 25 MiB.
-- `refresh_lots.py` refreshes every known lot with as few requests as possible, then runs `build_site.py`. A bloc's response holds every lot within 30 m, so it refetches only the smallest set of blocs whose files list every lot in `blocuri/` (a minimum set cover, solved exactly: reductions, then branch and bound per independent component; about 420 blocs, under 4 s to solve). The list is recomputed from the current files on each run. Failed blocs keep their old files.
+- `build_site.py` writes a static copy for hosting into `site/`: `index.html` plus `data.json`, all blocs in one file with each lot stored once (`{"blocs": [...], "lots": {id: lot}}`, a bloc's `parking_lots` become `[[lot id, distance], ...]`, `fetched` is the file's mtime in ms). About 22 MB, ~3 MB compressed; Cloudflare's per-file limit is 25 MiB.
+- `deploy_site.py` publishes `site/` to https://parcari.vladvas98.workers.dev, the `parcari` Worker (static assets only, no script) in the Cloudflare account `c33a4a303504473af1c6ff1a704de664`. It calls the Workers static-assets upload API with the stdlib (wrangler needs Node 22, this machine has 18): an upload session with a manifest of `{"/path": {hash, size}}` (hash = first 32 hex chars of sha256(base64 content + extension), as wrangler computes it, so files the dashboard already uploaded are reused), one base64 multipart POST per bucket of missing files, then a `PUT scripts/parcari` whose metadata holds the completion JWT, which deploys. Only changed files are uploaded. The token comes from `CLOUDFLARE_API_TOKEN` or `~/.config/parcari/cloudflare_token` (outside the repo; never print or commit it). It needs the Workers Scripts: Edit permission; it has no Pages, R2 or KV access, and can't read the account's workers.dev subdomain.
+- `refresh_lots.py` refreshes every known lot with as few requests as possible, then runs `build_site.py` and `deploy_site.py` (skip the deploy with `--no-deploy`; a failed deploy exits 1). A bloc's response holds every lot within 30 m, so it refetches only the smallest set of blocs whose files list every lot in `blocuri/` (a minimum set cover, solved exactly: reductions, then branch and bound per independent component; about 420 blocs, under 4 s to solve). The list is recomputed from the current files on each run. Failed blocs keep their old files.
 - `index.html` is a single-file viewer (vanilla JS + inline SVG, no build step) that loads every file in `blocuri/` and draws buildings, parking lots and spots on a pannable/zoomable map, colored by auction registration count.
 
 There is no package manager, build, lint or test setup.
@@ -27,12 +28,15 @@ python3 export_shapefile.py [out_dir]
 # View: serve over HTTP (see below), then open http://localhost:8000
 python3 serve.py [port]
 
-# Static site for hosting into site/ (or out_dir), then deploy that folder, e.g.
-# npx wrangler pages deploy site --project-name <name>, or upload it in the Cloudflare dashboard
+# Static site for hosting into site/ (or out_dir)
 python3 build_site.py [out_dir]
 
-# Refetch the minimal set of blocs covering every lot, then rebuild site/ (--dry-run just lists the ids)
-python3 refresh_lots.py [--dry-run] [out_dir]
+# Deploy site/ (or site_dir) to Cloudflare
+python3 deploy_site.py [site_dir]
+
+# Refetch the minimal set of blocs covering every lot, then rebuild and deploy site/
+# (--dry-run just lists the ids, --no-deploy only rebuilds)
+python3 refresh_lots.py [--dry-run] [--no-deploy] [out_dir]
 ```
 
 ## Things that aren't obvious from a single file
