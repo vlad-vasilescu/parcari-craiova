@@ -17,6 +17,7 @@
     --bg: #f6f7f9; --panel: #fff; --text: #1d2330; --muted: #6b7280; --border: #d9dde3;
     --building: #9aa3b2; --lot: rgba(139, 149, 167, .18); --lot-stroke: #8b95a7; --lot-near: rgba(214, 69, 69, .2);
     --c0: #2e9e5b; --c1: #3b7dd8; --c2: #e0a020; --c3: #d64545; --none: #b8bec8;
+    --day: #f5c518; --night: #2b4c9b;
   }
   :root[data-theme="dark"] {
     color-scheme: dark;
@@ -113,6 +114,10 @@
   table { border-collapse: collapse; width: 100%; }
   td { padding: 3px 0; vertical-align: top; }
   td:first-child { color: var(--muted); padding-right: 10px; white-space: nowrap; }
+  .regime { display: inline-flex; border-radius: 4px; overflow: hidden; font-size: 12px; font-weight: 600; }
+  .regime span { padding: 1px 7px; }
+  .regime .day { color: #1d2330; background: var(--day); }
+  .regime .night { color: #fff; background: var(--night); }
   .lotRow { display: flex; justify-content: space-between; padding: 3px 0; cursor: pointer; }
   .lotRow:hover { text-decoration: underline; }
   .coarse { display: none; }
@@ -326,6 +331,16 @@ function rows(obj) {
   return "<table>" + Object.entries(obj)
     .map(([k, v]) => `<tr><td>${k}</td><td>${v ?? "—"}</td></tr>`).join("") + "</table>";
 }
+
+// "night" -> a blue Night label, "day_and_night" -> yellow Day + blue Night; anything else as text.
+function regime(r) {
+  const parts = { night: ["night"], day_and_night: ["day", "night"] }[r];
+  if (!parts) return r;
+  return `<span class="regime">${parts.map(p => `<span class="${p}">${p === "day" ? "Day" : "Night"}</span>`).join("")}</span>`;
+}
+
+// The API's prices are monthly.
+const perYear = v => v == null ? v : `${+(v * 12).toFixed(2)} RON/year`;
 
 function draw(buildings, lotArr) {
   const lotById = new Map(lotArr.map(l => [l.id, l]));
@@ -615,7 +630,7 @@ function draw(buildings, lotArr) {
     const showLot = () => {
       details.style.color = "";
       details.innerHTML = `<b>${lot.name}</b>` + rows({
-        "Regime": lot.parking_regime,
+        "Regime": regime(lot.parking_regime),
         "Status": lot.status,
         "Spots": lot.residence_parking_spots.length,
         "Distance": lot.distances.map(([name, d]) => `${name}: ${d.toFixed(1)} m`).join("<br>"),
@@ -667,14 +682,14 @@ function draw(buildings, lotArr) {
     details.innerHTML = `<b>${lot.name} — spot #${spot.number}</b>` + rows({
       "Type": spot.spot_type,
       "Status": spot.status,
-      "Regime": spot.parking_regime_efectiv,
+      "Regime": regime(spot.parking_regime_efectiv),
       "Spot ID": spot.id,
       "Registrations": item?.registration_count ?? "not in auction",
       "Current bid": item?.current_bid,
-      "Base price PF": item?.base_price_pf,
-      "Base price PJ": item?.base_price_pj,
-      "Night price PF": item?.base_price_noapte_pf,
-      "Night price PJ": item?.base_price_noapte_pj,
+      "Base price PF": perYear(item?.base_price_pf),
+      "Base price PJ": perYear(item?.base_price_pj),
+      "Night price PF": perYear(item?.base_price_noapte_pf),
+      "Night price PJ": perYear(item?.base_price_noapte_pj),
       "Increment": item?.increment,
     });
   }
