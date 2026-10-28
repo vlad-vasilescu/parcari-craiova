@@ -340,7 +340,7 @@ function regime(r) {
 }
 
 // The API's prices are monthly.
-const perYear = v => v == null ? v : `${+(v * 12).toFixed(2)} RON/year`;
+const perYear = v => v == null ? v : `${Math.round(v * 12)} RON/year`;
 
 function draw(buildings, lotArr) {
   const lotById = new Map(lotArr.map(l => [l.id, l]));
@@ -685,7 +685,7 @@ function draw(buildings, lotArr) {
       "Regime": regime(spot.parking_regime_efectiv),
       "Spot ID": spot.id,
       "Registrations": item?.registration_count ?? "not in auction",
-      "Current bid": item?.current_bid,
+      "Current bid": perYear(item?.current_bid),
       "Base price PF": perYear(item?.base_price_pf),
       "Base price PJ": perYear(item?.base_price_pj),
       "Night price PF": perYear(item?.base_price_noapte_pf),
