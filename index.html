@@ -494,6 +494,13 @@ function draw(buildings, lotArr) {
   };
   const addFeature = (ring, kind, layers, props) => {
     const pts = ring.map(toXY), path = new Path2D(), box = [Infinity, Infinity, -Infinity, -Infinity];
+    // A layer is filled as one combined path with the nonzero rule, where overlapping rings wound in
+    // opposite directions cancel out and leave a hole. Some of the city's outlines are clockwise, so
+    // give every ring the same winding.
+    let area = 0;
+    for (let i = 1; i < pts.length; i++)
+      area += (pts[i - 1][0] - pts[0][0]) * (pts[i][1] - pts[0][1]) - (pts[i][0] - pts[0][0]) * (pts[i - 1][1] - pts[0][1]);
+    if (area < 0) pts.reverse();
     pts.forEach(([x, y], i) => {
       i ? path.lineTo(x, y) : path.moveTo(x, y);
       box[0] = Math.min(box[0], x); box[1] = Math.min(box[1], y);
@@ -993,18 +1000,16 @@ function progress(text, frac) {
 // Loads MERGED if it exists (static hosting), otherwise every .json file listed in DATA_DIR's directory
 // listing (serve.py and python3 -m http.server provide one).
 async function loadAll() {
-  // The same bloc can be in two files, and neighbouring blocs share lots: keep one copy of each, and
-  // remember each building's distance to the lot as [label, meters, bloc id]. A lot's copies can differ
-  // once a bloc is refetched, so the one from the most recently written file wins.
+  // The same bloc can be in two files, and neighbouring blocs share lots: keep one copy of each. A lot's
+  // copies can differ once a bloc is refetched, so the one from the most recently written file wins.
+  // Each building's distance to the lot is added as [label, meters, bloc id] once duplicates are gone.
   const buildings = new Map(), lots = new Map(), failed = [];
   const add = (b, fetched) => {
     if (buildings.has(b.id)) return;
     b.fetched = fetched;
-    const label = `${b.name}, ${b.street} ${b.house_number}`;
     for (const lot of b.parking_lots) {
       const old = lots.get(lot.id);
-      if (!old || fetched > old.fetched) lots.set(lot.id, { ...lot, fetched, distances: old?.distances ?? [] });
-      lots.get(lot.id).distances.push([label, lot.distance, b.id]);
+      if (!old || fetched > old.fetched) lots.set(lot.id, { ...lot, distances: [], fetched });
     }
     b.nearLots = b.parking_lots.map(l => [l.id, l.distance]);
     delete b.parking_lots;
@@ -1021,11 +1026,47 @@ async function loadAll() {
   if (failed.length) {
     document.getElementById("error").textContent = `Could not load ${failed.length} file(s): ${failed.slice(0, 20).join(", ")}`;
   }
+  dropDuplicates(buildings);
+  for (const b of buildings.values()) {
+    const label = `${b.name}, ${b.street} ${b.house_number}`;
+    for (const [id, d] of b.nearLots) lots.get(id).distances.push([label, d, b.id]);
+  }
   // draw() blocks for a moment; let the browser paint this message first.
   progress("Building the map…", 1);
   await new Promise(r => requestAnimationFrame(() => setTimeout(r)));
   draw([...buildings.values()], [...lots.values()].sort((a, b) => a.name.localeCompare(b.name)));
   loading.remove();
+}
+
+// The city lists some buildings under several ids with the same outline, some copies without a name.
+// Copies can differ by a few cm, start at another vertex or have an extra vertex on an edge, so two
+// outlines count as the same when every vertex of each is within TOL of the other's boundary. Keep one
+// per outline: a named one if there is any, then the lowest id.
+function dropDuplicates(buildings) {
+  const TOL = 0.5;  // meters
+  const all = [...buildings.values()];
+  if (!all.length) return;
+  const [lon0, lat0] = all[0].geometry.coordinates[0][0], kx = 111320 * Math.cos(lat0 * Math.PI / 180);
+  const list = all.map(b => {
+    const pts = b.geometry.coordinates[0].map(([x, y]) => [(x - lon0) * kx, (y - lat0) * 111320]);
+    let x0 = Infinity;
+    for (const [x] of pts) x0 = Math.min(x0, x);
+    return { b, pts, x0 };
+  }).sort((a, b) => a.x0 - b.x0);
+  const segDist = ([px, py], [ax, ay], [bx, by]) => {
+    const dx = bx - ax, dy = by - ay, l = dx * dx + dy * dy;
+    const t = l ? Math.max(0, Math.min(1, ((px - ax) * dx + (py - ay) * dy) / l)) : 0;
+    return Math.hypot(px - ax - t * dx, py - ay - t * dy);
+  };
+  const onBoundary = (p, q) => p.every(v => q.some((w, i) => segDist(v, w, q[(i + 1) % q.length]) < TOL));
+  const better = (a, b) => !!a.full_name !== !!b.full_name ? !!a.full_name : a.id < b.id;
+  // Sweep by the outlines' westmost x: matching outlines have it within TOL of each other.
+  for (let i = 0; i < list.length; i++) {
+    for (let j = i + 1; j < list.length && list[j].x0 - list[i].x0 < TOL; j++) {
+      const p = list[i], q = list[j];
+      if (onBoundary(p.pts, q.pts) && onBoundary(q.pts, p.pts)) buildings.delete(better(p.b, q.b) ? q.b.id : p.b.id);
+    }
+  }
 }
 
 // build_site.py lists its data chunks in MERGED, stores each lot once and each bloc's lots as
