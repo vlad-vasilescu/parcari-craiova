@@ -4,8 +4,9 @@
 Cookies (accessToken / refreshToken) are read from sample_curl.sh if it exists;
 when the access token expires the script refreshes it the same way the website
 does. If there are no cookies, or the refresh fails, it logs in with
-PARCARI_EMAIL / PARCARI_PASSWORD from the environment (prompting for whatever
-is missing when run in a terminal).
+PARCARI_EMAIL / PARCARI_PASSWORD from the environment, else the "email" and
+"password" in credentials.json next to this script (git-ignored), prompting for
+whatever is still missing when run in a terminal.
 
 Usage: python3 fetch_blocuri.py [start_id] [end_id]   (inclusive, default 5050 8521)
 """
@@ -22,6 +23,7 @@ import urllib.request
 API = "https://parcari-ticketing.primariacraiova.ro/api/"
 HERE = os.path.dirname(os.path.abspath(__file__))
 OUT_DIR = os.path.join(HERE, "blocuri")
+CREDENTIALS_FILE = os.path.join(HERE, "credentials.json")  # {"email": ..., "password": ...}, git-ignored
 DELAY = 0.2  # seconds between requests, to be gentle with the server
 
 jar = http.cookiejar.CookieJar()
@@ -73,12 +75,26 @@ class AuthError(Exception):
     pass
 
 
+def saved_credentials():
+    """(email, password) from CREDENTIALS_FILE, empty strings for whatever isn't there."""
+    try:
+        with open(CREDENTIALS_FILE, encoding="utf-8") as f:
+            saved = json.load(f)
+        return saved.get("email") or "", saved.get("password") or ""
+    except FileNotFoundError:
+        return "", ""
+    except (OSError, ValueError, AttributeError) as e:
+        print(f"Ignoring {CREDENTIALS_FILE}: {e}", file=sys.stderr)
+        return "", ""
+
+
 def login():
     """Log in like the website's login form; the server sets the token cookies."""
     global login_error
     if not credentials:
-        email = os.environ.get("PARCARI_EMAIL")
-        password = os.environ.get("PARCARI_PASSWORD")
+        saved_email, saved_password = saved_credentials()
+        email = os.environ.get("PARCARI_EMAIL") or saved_email
+        password = os.environ.get("PARCARI_PASSWORD") or saved_password
         if interactive:
             email = email or input("Email: ")
             password = password or getpass.getpass("Password: ")
@@ -105,8 +121,8 @@ def fetch(bloc_id):
         status, body = get(path)
         if status == 401:
             if not refresh() and not login():
-                raise AuthError("Token refresh and login failed - set PARCARI_EMAIL / PARCARI_PASSWORD"
-                                " or paste fresh cookies into sample_curl.sh")
+                raise AuthError("Token refresh and login failed - put your login in credentials.json, set"
+                                " PARCARI_EMAIL / PARCARI_PASSWORD or paste fresh cookies into sample_curl.sh")
             continue
         if status == 429 or status >= 500:
             time.sleep(5 * (attempt + 1))
@@ -139,7 +155,8 @@ def main():
     start = int(sys.argv[1]) if len(sys.argv) > 1 else 5050
     end = int(sys.argv[2]) if len(sys.argv) > 2 else 8521
     if not load_cookies() and not login():
-        sys.exit("No cookies in sample_curl.sh and login failed - set PARCARI_EMAIL / PARCARI_PASSWORD")
+        sys.exit("No cookies in sample_curl.sh and login failed - put your login in credentials.json"
+                 " or set PARCARI_EMAIL / PARCARI_PASSWORD")
     saved, skipped, missing = 0, 0, {}
     for bloc_id in range(start, end + 1):
         out = os.path.join(OUT_DIR, f"{bloc_id}.json")

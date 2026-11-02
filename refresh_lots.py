@@ -178,7 +178,8 @@ def main():
         return
 
     if not fetch_blocuri.load_cookies() and not fetch_blocuri.login():
-        sys.exit("No cookies in sample_curl.sh and login failed - set PARCARI_EMAIL / PARCARI_PASSWORD")
+        sys.exit("No cookies in sample_curl.sh and login failed - put your login in credentials.json"
+                 " or set PARCARI_EMAIL / PARCARI_PASSWORD")
     saved, failed = 0, {}
     for n, bloc_id in enumerate(ids, 1):
         try:

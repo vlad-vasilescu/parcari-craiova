@@ -2,16 +2,19 @@
 """Serve the viewer like `python3 -m http.server`, plus POST /api/refetch/<id>, which downloads one
 bloc again into blocuri/<id>.json and returns it, and POST /api/login, which logs in with the
 {"email", "password"} JSON the viewer's login dialog sends. Auth otherwise works as in
-fetch_blocuri.py, except that it never prompts in the terminal: without cookies or
-PARCARI_EMAIL / PARCARI_PASSWORD, the viewer asks for the login on the first refetch.
+fetch_blocuri.py, except that it never prompts in the terminal: without cookies,
+PARCARI_EMAIL / PARCARI_PASSWORD or credentials.json, the viewer asks for the login on the
+first refetch.
 
-Listens on localhost only, since the endpoints make requests with your session.
+Listens on localhost only, since the endpoints make requests with your session, and never
+serves credentials.json or sample_curl.sh.
 
 Usage: python3 serve.py [port]   (default 8000)
 """
 import functools
 import http.server
 import json
+import os
 import re
 import sys
 import threading
@@ -19,9 +22,17 @@ import threading
 import fetch_blocuri as fb
 
 lock = threading.Lock()  # one API call at a time: the cookie jar and credentials are shared
+PRIVATE = {os.path.realpath(p) for p in (fb.CREDENTIALS_FILE, os.path.join(fb.HERE, "sample_curl.sh"))}
 
 
 class Handler(http.server.SimpleHTTPRequestHandler):
+    def send_head(self):
+        # The project folder holds the login and session tokens; never serve them.
+        if os.path.realpath(self.translate_path(self.path)) in PRIVATE:
+            self.send_error(404)
+            return None
+        return super().send_head()
+
     def end_headers(self):
         # Revalidate every time, so a reload after a refetch can't show a heuristically cached old file.
         self.send_header("Cache-Control", "no-cache")
@@ -83,10 +94,10 @@ class Handler(http.server.SimpleHTTPRequestHandler):
 def main():
     port = int(sys.argv[1]) if len(sys.argv) > 1 else 8000
     fb.interactive = False  # a prompt in the middle of a request would just hang it; the viewer asks instead
-    # Log in now if there are no cookies but the credentials are in the environment.
+    # Log in now if there are no cookies but the credentials are in the environment or credentials.json.
     if not fb.load_cookies() and not fb.login():
-        print("No cookies and no login with PARCARI_EMAIL / PARCARI_PASSWORD - the viewer will ask for a login"
-              " on the first refetch", file=sys.stderr)
+        print("No cookies and no login from PARCARI_EMAIL / PARCARI_PASSWORD or credentials.json"
+              " - the viewer will ask for a login on the first refetch", file=sys.stderr)
     server = http.server.ThreadingHTTPServer(
         ("127.0.0.1", port), functools.partial(Handler, directory=fb.HERE))
     print(f"Serving on http://localhost:{port}", flush=True)

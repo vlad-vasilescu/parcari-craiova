@@ -1,5 +1,6 @@
-# Live session tokens
+# Live session tokens and the login (credentials.json, see fetch_blocuri.py)
 sample_curl.sh
+credentials.json
 
 # Scraped data and generated outputs (re-create with the scripts)
 blocuri/
