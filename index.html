@@ -978,7 +978,7 @@ function draw(buildings, lotArr) {
 
 const DATA_DIR = "blocuri/", MERGED = "data.json";
 const loading = document.getElementById("loading");
-let staticSite = false;  // loaded MERGED (a build_site.py copy): no serve.py, so no refetching
+let staticSite = false;  // loaded MERGED and its chunks (a build_site.py copy): no serve.py, so no refetching
 
 function progress(text, frac) {
   document.getElementById("loadingText").textContent = text;
@@ -1024,18 +1024,26 @@ async function loadAll() {
   loading.remove();
 }
 
-// build_site.py stores each lot once and each bloc's lots as [id, distance]; rebuild the bloc files' shape.
+// build_site.py lists its data chunks in MERGED, stores each lot once and each bloc's lots as
+// [id, distance]; load every chunk, then rebuild the bloc files' shape.
 async function loadMerged(res, add) {
-  // A compressed response's Content-Length (if any) counts compressed bytes, so there's no total then.
-  const total = res.headers.get("Content-Encoding") ? 0 : +res.headers.get("Content-Length") || 0;
-  const reader = res.body.getReader(), chunks = [];
-  let size = 0;
-  for (let part; !(part = await reader.read()).done;) {
-    chunks.push(part.value);
-    size += part.value.length;
-    progress(`Loading data… ${(size / 1e6).toFixed(1)} MB`, total && size / total);
-  }
-  const { blocs, lots } = JSON.parse(await new Blob(chunks).text());
+  const { chunks } = await res.json();
+  // The listed sizes are uncompressed, like the bytes the reader returns.
+  const total = chunks.reduce((sum, [, size]) => sum + size, 0), blocs = [], lots = {};
+  let loaded = 0;
+  await Promise.all(chunks.map(async ([path]) => {
+    const r = await fetch(path);
+    if (!r.ok) throw new Error(`${path}: ${r.status} ${r.statusText}`);
+    const reader = r.body.getReader(), parts = [];
+    for (let part; !(part = await reader.read()).done;) {
+      parts.push(part.value);
+      loaded += part.value.length;
+      progress(`Loading data… ${(loaded / 1e6).toFixed(1)} MB`, loaded / total);
+    }
+    const chunk = JSON.parse(await new Blob(parts).text());
+    blocs.push(...chunk.blocs);
+    Object.assign(lots, chunk.lots);
+  }));
   for (const b of blocs) {
     b.parking_lots = b.parking_lots.map(([id, distance]) => ({ ...lots[id], distance }));
     add(b, b.fetched);

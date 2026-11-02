@@ -1,15 +1,18 @@
 #!/usr/bin/env python3
 """Build a static copy of the viewer for hosting without serve.py (deploy_site.py puts it on Cloudflare).
 
-Writes index.html and data.json into out_dir. data.json holds every bloc in
-blocuri/*.json, with each parking lot stored once instead of once per nearby
-bloc (about 20x smaller). The viewer loads it when it exists and hides the
-"Refetch this bloc" button, since a static host can't call the city's API.
+Writes index.html, data.json and data/<n>.json into out_dir. Together the
+data/ chunks hold every bloc in blocuri/*.json, with each parking lot stored
+once instead of once per nearby bloc (about 20x smaller). The viewer loads
+data.json when it exists, then every chunk it lists, and hides the "Refetch
+this bloc" button, since a static host can't call the city's API.
 
-Format: {"blocs": [bloc, ...], "lots": {id: lot}}. Each bloc gets "fetched"
-(its file's mtime in ms) and its "parking_lots" become [[lot id, distance], ...];
-lots keep everything except "distance". When copies of a lot differ, the one
-from the newest file wins, as in the viewer.
+data.json is {"chunks": [[path, size in bytes], ...]}. Each chunk is
+{"blocs": [bloc, ...], "lots": {id: lot}}, about CHUNK_SIZE bytes; a bloc's
+lots can be in any chunk. Each bloc gets "fetched" (its file's mtime in ms)
+and its "parking_lots" become [[lot id, distance], ...]; lots keep everything
+except "distance". When copies of a lot differ, the one from the newest file
+wins, as in the viewer.
 
 Usage: python3 build_site.py [out_dir]   (default site/)
 """
@@ -21,7 +24,36 @@ import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 IN_DIR = os.path.join(HERE, "blocuri")
-MAX_FILE = 25 * 1024 * 1024  # Cloudflare's per-file limit for static assets
+CHUNK_DIR = "data"
+CHUNK_SIZE = 2_000_000  # bytes of JSON per chunk, roughly
+
+
+def dumps(obj):
+    return json.dumps(obj, ensure_ascii=False, separators=(",", ":"))
+
+
+def write(path, text):
+    with open(path + ".tmp", "w", encoding="utf-8") as f:
+        f.write(text)
+    os.replace(path + ".tmp", path)
+
+
+def chunks(blocs, lots):
+    """Pack blocs, then lots, in id order into {"blocs", "lots"} dicts of about CHUNK_SIZE bytes each."""
+    items = [("blocs", b["id"], b) for b in blocs.values()] + [("lots", i, lot) for i, lot in lots.items()]
+    items.sort(key=lambda t: (t[0], t[1]))
+    chunk, size = {"blocs": [], "lots": {}}, 0
+    for kind, i, obj in items:
+        if kind == "blocs":
+            chunk["blocs"].append(obj)
+        else:
+            chunk["lots"][i] = obj
+        size += len(dumps(obj).encode())
+        if size >= CHUNK_SIZE:
+            yield chunk
+            chunk, size = {"blocs": [], "lots": {}}, 0
+    if size:
+        yield chunk
 
 
 def main(out_dir=None):
@@ -43,17 +75,23 @@ def main(out_dir=None):
         b["parking_lots"] = near
         blocs[b["id"]] = b
 
-    os.makedirs(out_dir, exist_ok=True)
+    # Rewrite the chunk directory from scratch, so deploy_site.py doesn't publish leftover chunks.
+    chunk_dir = os.path.join(out_dir, CHUNK_DIR)
+    shutil.rmtree(chunk_dir, ignore_errors=True)
+    os.makedirs(chunk_dir)
+    listed = []
+    for n, chunk in enumerate(chunks(blocs, lots)):
+        text = dumps(chunk)
+        name = f"{CHUNK_DIR}/{n}.json"
+        write(os.path.join(out_dir, name), text)
+        listed.append([name, len(text.encode())])
     data_path = os.path.join(out_dir, "data.json")
-    with open(data_path + ".tmp", "w", encoding="utf-8") as f:
-        json.dump({"blocs": list(blocs.values()), "lots": lots}, f, ensure_ascii=False, separators=(",", ":"))
-    os.replace(data_path + ".tmp", data_path)
+    write(data_path, dumps({"chunks": listed}))
     shutil.copy(os.path.join(HERE, "index.html"), out_dir)
 
-    size = os.path.getsize(data_path)
-    print(f"{len(blocs)} blocs, {len(lots)} lots -> {data_path} ({size / 1e6:.1f} MB)")
-    if size > MAX_FILE:
-        print("warning: over Cloudflare's 25 MiB per-file limit", file=sys.stderr)
+    total = sum(size for _, size in listed)
+    print(f"{len(blocs)} blocs, {len(lots)} lots -> {data_path} + {len(listed)} chunks in {chunk_dir} "
+          f"({total / 1e6:.1f} MB, largest {max(size for _, size in listed) / 1e6:.1f} MB)")
 
 
 if __name__ == "__main__":
