@@ -350,8 +350,12 @@ function draw(buildings, lotArr) {
     document.getElementById("title").textContent = buildings.length <= 3
       ? buildings.map(b => `${b.name} (${b.street} ${b.house_number})`).join(" · ")
       : `${buildings.length} buildings`;
+    // The newest bloc file: the end of the last refresh_lots.py run, or a later single-bloc refetch.
+    let last = 0;
+    for (const b of buildings) if (b.fetched > last) last = b.fetched;
     document.getElementById("subtitle").textContent =
-      `${buildings.length} buildings · ${lots.length} parking lots · ${spotCount} spots · waitlist: ${buildings.reduce((n, b) => n + b.waitlist.length, 0)}`;
+      `${buildings.length} buildings · ${lots.length} parking lots · ${spotCount} spots · waitlist: ${buildings.reduce((n, b) => n + b.waitlist.length, 0)}`
+      + ` · last refetch: ${last ? new Date(last).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" }) : "—"}`;
   };
   summary();
 
