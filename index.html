@@ -549,7 +549,7 @@ function draw(buildings, lotArr) {
   };
 
   // me: the device's location (world meters) and its accuracy radius, while "Show my location" is on.
-  let selSpot = null, hoverSpot = null, selBuilding = null, nearLots = [], me = null;
+  let selSpot = null, hoverSpot = null, selBuilding = null, selLot = null, nearLots = [], me = null;
 
   function render() {
     frame = 0;
@@ -592,6 +592,7 @@ function draw(buildings, lotArr) {
     toWorld();
     layer("lot", C.lot, C["lot-stroke"], 1);
     nearLots.forEach(f => paint(f.path, C["lot-near"], C.c3, 2.5));
+    if (selLot) paint(selLot.path, C["lot-near"]);
     // Lot labels sit under the spots; keep them small so they don't clutter.
     if (!far) labels("lot", 3, C.muted, 700, 0.5);
     layer("building", C.building, C["lot-stroke"], 1);
@@ -601,6 +602,8 @@ function draw(buildings, lotArr) {
       layer("spotStroke", null, C.text, 0.6);
       layer("handicap", null, C.text, 0.6, [3, 2]);
     }
+    // Over the spots, which reach the lot's edge, and in the text color to stand out among a bloc's near lots.
+    if (selLot) paint(selLot.path, null, C.text, 3);
     if (hoverSpot) spotOutline(hoverSpot, 2);
     if (selSpot) spotOutline(selSpot, 3);
     if (!veryFar) labels("building", 4, C.text, 700);
@@ -639,6 +642,8 @@ function draw(buildings, lotArr) {
     const regs = [...items.values()].reduce((n, i) => n + i.registration_count, 0);
 
     const showLot = () => {
+      selLot = lot.feature;
+      schedule();
       details.style.color = "";
       details.innerHTML = `<b>${lot.name}</b>` + rows({
         "Regime": regime(lot.parking_regime),
@@ -688,6 +693,7 @@ function draw(buildings, lotArr) {
   function showSpot(f) {
     const { lot, spot, item } = f;
     selSpot = f;
+    selLot = null;
     schedule();
     details.style.color = "";
     details.innerHTML = `<b>${lot.name} — spot #${spot.number}</b>` + rows({
@@ -708,6 +714,7 @@ function draw(buildings, lotArr) {
   // Bloc details + search
   function showBloc(b, zoom) {
     selBuilding = b.feature;
+    selLot = null;
     const near = b.nearLots.map(([id, d]) => [lotById.get(id), d]);
     nearLots = near.map(([l]) => l.feature);
     schedule();
@@ -771,6 +778,7 @@ function draw(buildings, lotArr) {
     summary();
     // Drop references to the features that were just replaced.
     selSpot = hoverSpot = null;
+    if (selLot) selLot = lotById.get(selLot.lot.id).feature;
     if (wasSelected) showBloc(b, false);
     else if (selBuilding) nearLots = selBuilding.b.nearLots.map(([id]) => lotById.get(id).feature);
     schedule();
