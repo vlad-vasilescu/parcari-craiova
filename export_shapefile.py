@@ -14,7 +14,12 @@ convex hull of its lots cut back to that point's Voronoi cell (so zones never
 overlap). The points are fetched from Overpass once and cached in
 neighbourhoods.json; delete that file to refetch.
 
-Usage: python3 export_shapefile.py [out_dir]   (default shapefiles/)
+With --zones ZIP, the zones come from the polygon shapefile in ZIP instead
+(e.g. a hand-drawn scanplanner file, its "name" column), and only the spots
+file is written: each spot goes to the zone holding its centroid, or the
+nearest one if it's outside all of them.
+
+Usage: python3 export_shapefile.py [--zones ZIP] [out_dir]   (default shapefiles/)
 """
 import glob
 import io
@@ -204,6 +209,91 @@ def zones(lots, neighbourhoods):
     return of_lot, out
 
 
+def read_zones(path):
+    """Return [(name, rings)] from the polygon shapefile in zip `path` (name = its "name" column)."""
+    with zipfile.ZipFile(path) as z:
+        names = z.namelist()
+
+        def member(ext):
+            found = [n for n in names if n.lower().endswith(ext) and "__macosx" not in n.lower()]
+            if len(found) != 1:
+                sys.exit("%s: expected one %s file, found %d" % (path, ext, len(found)))
+            return z.read(found[0])
+
+        shp, dbf = member(".shp"), member(".dbf")
+    count, header_len, record_len = struct.unpack("<IHH", dbf[4:12])
+    fields = [(dbf[i:i + 11].split(b"\0")[0].decode(), dbf[i + 16])
+              for i in range(32, header_len - 1, 32)]
+    zone_names = []
+    for r in range(count):
+        off, rec = header_len + r * record_len + 1, {}
+        for name, length in fields:
+            rec[name] = dbf[off:off + length].decode("utf-8", "replace").strip()
+            off += length
+        zone_names.append(rec.get("name", ""))
+    out, pos = [], 100
+    for name in zone_names:
+        _, length = struct.unpack(">2i", shp[pos:pos + 8])
+        body = shp[pos + 8:pos + 8 + 2 * length]
+        pos += 8 + 2 * length
+        if struct.unpack("<i", body[:4])[0] != 5:
+            continue  # null or non-polygon shape
+        n_parts, n_points = struct.unpack("<2i", body[36:44])
+        parts = list(struct.unpack("<%di" % n_parts, body[44:44 + 4 * n_parts])) + [n_points]
+        coords = struct.unpack("<%dd" % (2 * n_points), body[44 + 4 * n_parts:44 + 4 * n_parts + 16 * n_points])
+        points = list(zip(coords[::2], coords[1::2]))
+        out.append((name, [points[a:b] for a, b in zip(parts, parts[1:])]))
+    return out
+
+
+def inside(rings, x, y):
+    """Even-odd point in polygon over all rings (so holes and multiple parts both work)."""
+    hit = False
+    for ring in rings:
+        for (x0, y0), (x1, y1) in zip(ring, ring[1:] + ring[:1]):
+            if (y0 > y) != (y1 > y) and x < x0 + (y - y0) * (x1 - x0) / (y1 - y0):
+                hit = not hit
+    return hit
+
+
+def boundary_distance(rings, x, y, k):
+    """Distance in degrees of latitude from (x, y) to the rings' edges, lon scaled by k."""
+    best = float("inf")
+    for ring in rings:
+        for (x0, y0), (x1, y1) in zip(ring, ring[1:] + ring[:1]):
+            ax, ay, bx, by, px = x0 * k, y0, x1 * k, y1, x * k
+            dx, dy = bx - ax, by - ay
+            t = 0 if dx == dy == 0 else max(0, min(1, ((px - ax) * dx + (y - ay) * dy) / (dx * dx + dy * dy)))
+            best = min(best, math.hypot(ax + t * dx - px, ay + t * dy - y))
+    return best
+
+
+def spot_zones(spots, zone_list):
+    """Return [zone name] for each spot in `spots`: the zone holding its centroid, else the nearest."""
+    k = math.cos(math.radians(44.32))
+    boxes = [bbox([p for r in rings for p in r]) for _, rings in zone_list]
+    out, outside, overlap = [], [], 0
+    for spot in spots:
+        ring = outer_ring(spot["geometry"])
+        if ring[0] == ring[-1]:
+            ring = ring[:-1]
+        x = sum(p[0] for p in ring) / len(ring)
+        y = sum(p[1] for p in ring) / len(ring)
+        hits = [j for j, (_, rings) in enumerate(zone_list)
+                if boxes[j][0] <= x <= boxes[j][2] and boxes[j][1] <= y <= boxes[j][3] and inside(rings, x, y)]
+        if len(hits) > 1:
+            overlap += 1
+        if not hits:
+            hits = [min(range(len(zone_list)), key=lambda j: boundary_distance(zone_list[j][1], x, y, k))]
+            outside.append(boundary_distance(zone_list[hits[0]][1], x, y, k) * 111320)
+        out.append(zone_list[hits[0]][0])
+    if outside:
+        print("%d spots outside every zone, given to the nearest (up to %.0f m away)" % (len(outside), max(outside)))
+    if overlap:
+        print("%d spots in more than one zone, given to the first" % overlap)
+    return out
+
+
 def rings_of(geometry):
     """Shapefile rings: closed, outer rings clockwise, holes counter-clockwise."""
     polys = geometry["coordinates"]
@@ -240,7 +330,7 @@ def spot_attributes(lot, spot, street, zone):
         "spot_count": 1,
         "spot_type": spot.get("spot_type") or "",
         "off_type": "residential",
-        "area_id": str(lot["id"]),
+        "area_id": zone,
         "park_code": lot.get("name") or "",
         "shape_id": spot.get("number") or "",
         "roof_id": zone,
@@ -321,8 +411,27 @@ def main():
     lots = load_lots()
     if not lots:
         sys.exit("no parking lots found in " + IN_DIR)
-    out_dir = sys.argv[1] if len(sys.argv) > 1 else os.path.join(HERE, "shapefiles")
+    args = sys.argv[1:]
+    zones_file = None
+    if args[:1] == ["--zones"] and len(args) >= 2:
+        zones_file, args = args[1], args[2:]
+    out_dir = args[0] if args else os.path.join(HERE, "shapefiles")
     date = time.strftime("%Y%m%d")
+    if zones_file:
+        spots = [(lot, spot, street) for _, (lot, street) in sorted(lots.items())
+                 for spot in active_spots(lot)]
+        given = read_zones(zones_file)
+        spots = [s + (z,) for s, z in zip(spots, spot_zones([s[1] for s in spots], given))]
+        counts = {}
+        for *_, z in spots:
+            counts[z] = counts.get(z, 0) + 1
+        for name, _ in given:
+            print("%6d  %s" % (counts.get(name, 0), name))
+        base = "craiova_%s_4326" % date
+        write_zip(os.path.join(out_dir, base + ".zip"), base, SPOT_FIELDS,
+                  [spot["geometry"] for _, spot, _, _ in spots],
+                  [spot_attributes(*s) for s in spots])
+        return
     zone_of, zone_list = zones(lots, load_neighbourhoods())
     spots = [(lot, spot, street, zone_of[i]) for i, (lot, street) in sorted(lots.items())
              for spot in active_spots(lot)]
